@@ -1,0 +1,17 @@
+[package]
+name = "ripe-tui"
+description = "ratatui editor for ripe (bin: ripe)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ripe"
+path = "src/main.rs"
+
+[dependencies]
+ripe-core.workspace = true
+
+[lints]
+workspace = true

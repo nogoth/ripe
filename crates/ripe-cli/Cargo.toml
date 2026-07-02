@@ -1,0 +1,17 @@
+[package]
+name = "ripe-cli"
+description = "Headless pipe runner for ripe (bin: ripe-run)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ripe-run"
+path = "src/main.rs"
+
+[dependencies]
+ripe-core.workspace = true
+
+[lints]
+workspace = true
