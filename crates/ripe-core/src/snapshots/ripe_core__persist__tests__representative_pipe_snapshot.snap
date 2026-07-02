@@ -1,0 +1,169 @@
+---
+source: crates/ripe-core/src/persist.rs
+expression: "serde_json::to_string_pretty(&pipe).unwrap()"
+---
+{
+  "version": 1,
+  "name": "news_pipeline",
+  "params": [
+    {
+      "name": "url",
+      "kind": "url",
+      "default": "https://news.ycombinator.com/rss"
+    }
+  ],
+  "nodes": [
+    {
+      "id": 1,
+      "kind": "fetch_feed",
+      "params": {
+        "url": "${url}"
+      }
+    },
+    {
+      "id": 2,
+      "kind": "filter",
+      "params": {
+        "rules": [
+          "pubDate > now - 2d"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "kind": "regex",
+      "params": {
+        "field": "title",
+        "mode": "extract",
+        "pattern": "(?<score>\\d+) points"
+      }
+    },
+    {
+      "id": 4,
+      "kind": "filter",
+      "params": {
+        "rules": [
+          "score > 100"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "kind": "fetch_feed",
+      "params": {
+        "url": "https://lobste.rs/rss"
+      }
+    },
+    {
+      "id": 6,
+      "kind": "union",
+      "params": {}
+    },
+    {
+      "id": 7,
+      "kind": "sort",
+      "params": {
+        "by": "pubDate",
+        "order": "desc"
+      }
+    },
+    {
+      "id": 8,
+      "kind": "limit",
+      "params": {
+        "n": 20
+      }
+    },
+    {
+      "id": 9,
+      "kind": "output",
+      "params": {
+        "destination": "output.xml",
+        "format": "rss"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": {
+        "node": 1,
+        "port": "out"
+      },
+      "to": {
+        "node": 2,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": 2,
+        "port": "out"
+      },
+      "to": {
+        "node": 3,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": 3,
+        "port": "out"
+      },
+      "to": {
+        "node": 4,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": 4,
+        "port": "out"
+      },
+      "to": {
+        "node": 6,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": 5,
+        "port": "out"
+      },
+      "to": {
+        "node": 6,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": 6,
+        "port": "out"
+      },
+      "to": {
+        "node": 7,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": 7,
+        "port": "out"
+      },
+      "to": {
+        "node": 8,
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": 8,
+        "port": "out"
+      },
+      "to": {
+        "node": 9,
+        "port": "in"
+      }
+    }
+  ],
+  "next_id": 10
+}

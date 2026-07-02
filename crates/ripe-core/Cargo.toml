@@ -28,6 +28,7 @@ directories.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true
+insta.workspace = true
 
 [lints]
 workspace = true
