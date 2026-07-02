@@ -1,0 +1,23 @@
+---
+source: crates/ripe-core/src/format.rs
+expression: "emit(Format::Json, \"Snapshot Feed\", &sample_items()).unwrap()"
+---
+[
+  {
+    "author": "Ada",
+    "description": "Hello, world",
+    "guid": "post-1",
+    "link": "https://example.dev/1",
+    "pubDate": "2026-06-01T10:00:00+00:00",
+    "score": 42,
+    "title": "First post"
+  },
+  {
+    "link": "https://example.dev/2",
+    "pubDate": "not a date",
+    "title": "Second post"
+  },
+  {
+    "title": "Third post"
+  }
+]

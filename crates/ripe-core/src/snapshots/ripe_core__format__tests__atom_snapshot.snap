@@ -1,0 +1,31 @@
+---
+source: crates/ripe-core/src/format.rs
+expression: "emit(Format::Atom, \"Snapshot Feed\", &sample_items()).unwrap()"
+---
+<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Snapshot Feed</title>
+  <id>Snapshot Feed</id>
+  <updated>2026-06-01T10:00:00+00:00</updated>
+  <entry>
+    <title>First post</title>
+    <id>post-1</id>
+    <updated>2026-06-01T10:00:00+00:00</updated>
+    <author>
+      <name>Ada</name>
+    </author>
+    <link href="https://example.dev/1" rel="alternate"/>
+    <summary>Hello, world</summary>
+  </entry>
+  <entry>
+    <title>Second post</title>
+    <id>https://example.dev/2</id>
+    <updated>1970-01-01T00:00:00+00:00</updated>
+    <link href="https://example.dev/2" rel="alternate"/>
+  </entry>
+  <entry>
+    <title>Third post</title>
+    <id></id>
+    <updated>1970-01-01T00:00:00+00:00</updated>
+  </entry>
+</feed>

@@ -7,6 +7,7 @@ pub mod bind;
 pub mod engine;
 pub mod expr;
 pub mod fetch;
+pub mod format;
 pub mod graph;
 pub mod item;
 pub mod logging;
@@ -16,6 +17,7 @@ pub mod persist;
 
 pub use bind::{Bindings, PipeParam, PipeParamKind};
 pub use engine::{Engine, EngineConfig, EvalCache, EvalReport, NodeStatus};
+pub use format::{Format, emit};
 pub use graph::{Edge, Node, NodeId, Pipe};
 pub use item::{Item, PortSpec, PortType, PortValue};
 pub use module::{EvalCtx, Module, Registry};

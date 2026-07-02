@@ -22,8 +22,11 @@ regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "json"] }
 feed-rs = "2"
+rss = "2"
+atom_syndication = "0.12"
 csv = "1"
 serde_json_path = "0.7"
+clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"

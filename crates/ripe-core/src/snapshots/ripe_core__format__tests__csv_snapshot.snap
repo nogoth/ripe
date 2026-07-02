@@ -1,0 +1,8 @@
+---
+source: crates/ripe-core/src/format.rs
+expression: "emit(Format::Csv, \"Snapshot Feed\", &sample_items()).unwrap()"
+---
+author,description,guid,link,pubDate,score,title
+Ada,"Hello, world",post-1,https://example.dev/1,2026-06-01T10:00:00+00:00,42,First post
+,,,https://example.dev/2,not a date,,Second post
+,,,,,,Third post
