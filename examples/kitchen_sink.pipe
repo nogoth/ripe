@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "name": "kitchen-sink",
+  "params": [
+    {
+      "name": "url",
+      "kind": "url",
+      "default": "https://hnrss.org/frontpage"
+    },
+    {
+      "name": "min_score",
+      "kind": "number",
+      "default": 50
+    }
+  ],
+  "nodes": [
+    {
+      "id": 1,
+      "kind": "fetch_feed",
+      "params": { "url": "${url}" }
+    },
+    {
+      "id": 2,
+      "kind": "filter",
+      "params": {
+        "rules": ["pubDate > now - 7d"],
+        "mode": "permit",
+        "match": "all"
+      }
+    },
+    {
+      "id": 3,
+      "kind": "regex",
+      "params": {
+        "field": "description",
+        "pattern": "Points:\\s*(?<score>\\d+)",
+        "mode": "extract"
+      }
+    },
+    {
+      "id": 4,
+      "kind": "filter",
+      "params": { "rules": ["score > ${min_score}"] }
+    },
+    {
+      "id": 5,
+      "kind": "fetch_json",
+      "params": {
+        "url": "https://hn.algolia.com/api/v1/search?tags=front_page",
+        "path": "$.hits"
+      }
+    },
+    {
+      "id": 6,
+      "kind": "transform",
+      "params": {
+        "ops": [
+          "rename url link",
+          "rename created_at pubDate",
+          "rename points score",
+          "rename objectID guid",
+          "drop _highlightResult"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "kind": "reverse",
+      "params": {}
+    },
+    {
+      "id": 8,
+      "kind": "fetch_csv",
+      "params": {
+        "url": "https://raw.githubusercontent.com/datasets/continent-codes/main/data/continent-codes.csv"
+      }
+    },
+    {
+      "id": 9,
+      "kind": "transform",
+      "params": {
+        "ops": ["rename Name title", "rename Code guid"]
+      }
+    },
+    {
+      "id": 10,
+      "kind": "tail",
+      "params": { "n": 3 }
+    },
+    {
+      "id": 11,
+      "kind": "union",
+      "params": {}
+    },
+    {
+      "id": 12,
+      "kind": "unique",
+      "params": { "by": "link" }
+    },
+    {
+      "id": 13,
+      "kind": "sort",
+      "params": { "by": "score", "order": "desc" }
+    },
+    {
+      "id": 14,
+      "kind": "limit",
+      "params": { "n": 25 }
+    },
+    {
+      "id": 15,
+      "kind": "output",
+      "params": { "format": "rss", "destination": "" }
+    }
+  ],
+  "edges": [
+    { "from": { "node": 1, "port": "out" }, "to": { "node": 2, "port": "in" } },
+    { "from": { "node": 2, "port": "out" }, "to": { "node": 3, "port": "in" } },
+    { "from": { "node": 3, "port": "out" }, "to": { "node": 4, "port": "in" } },
+    { "from": { "node": 5, "port": "out" }, "to": { "node": 6, "port": "in" } },
+    { "from": { "node": 6, "port": "out" }, "to": { "node": 7, "port": "in" } },
+    { "from": { "node": 8, "port": "out" }, "to": { "node": 9, "port": "in" } },
+    { "from": { "node": 9, "port": "out" }, "to": { "node": 10, "port": "in" } },
+    { "from": { "node": 4, "port": "out" }, "to": { "node": 11, "port": "in" } },
+    { "from": { "node": 7, "port": "out" }, "to": { "node": 11, "port": "in" } },
+    { "from": { "node": 10, "port": "out" }, "to": { "node": 11, "port": "in" } },
+    { "from": { "node": 11, "port": "out" }, "to": { "node": 12, "port": "in" } },
+    { "from": { "node": 12, "port": "out" }, "to": { "node": 13, "port": "in" } },
+    { "from": { "node": 13, "port": "out" }, "to": { "node": 14, "port": "in" } },
+    { "from": { "node": 14, "port": "out" }, "to": { "node": 15, "port": "in" } }
+  ],
+  "next_id": 16
+}
