@@ -61,6 +61,9 @@ pub const PIPE_FORMAT_VERSION: u32 = 1;
 pub struct Pipe {
     pub version: u32,
     pub name: String,
+    /// Pipe-level parameters, referenced from node params as `${name}`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub params: Vec<crate::bind::PipeParam>,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     next_id: u64,
@@ -71,10 +74,16 @@ impl Pipe {
         Self {
             version: PIPE_FORMAT_VERSION,
             name: name.into(),
+            params: Vec::new(),
             nodes: Vec::new(),
             edges: Vec::new(),
             next_id: 1,
         }
+    }
+
+    /// The pipe's terminal node (first node of kind `output`), if any.
+    pub fn output_node(&self) -> Option<NodeId> {
+        self.nodes.iter().find(|n| n.kind == "output").map(|n| n.id)
     }
 
     pub fn add_node(&mut self, kind: impl Into<String>, params: Params) -> NodeId {
@@ -133,11 +142,26 @@ impl Pipe {
         }
 
         for node in &self.nodes {
-            if registry.get(&node.kind).is_none() {
+            let Some(module) = registry.get(&node.kind) else {
                 errors.push(format!(
                     "node {}: unknown module kind `{}`",
                     node.id, node.kind
                 ));
+                continue;
+            };
+            // ${name} references must point at declared pipe params.
+            match crate::bind::param_refs(&node.params, &module.param_schema()) {
+                Ok(refs) => {
+                    for name in refs {
+                        if !self.params.iter().any(|p| p.name == name) {
+                            errors.push(format!(
+                                "node {}: references undeclared pipe param `${{{name}}}`",
+                                node.id
+                            ));
+                        }
+                    }
+                }
+                Err(e) => errors.push(format!("node {}: {e}", node.id)),
             }
         }
 

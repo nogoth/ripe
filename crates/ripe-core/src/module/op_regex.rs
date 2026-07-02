@@ -29,8 +29,11 @@ impl Module for RegexOp {
             FieldSpec::required("pattern", "Pattern", FieldKind::Text),
             FieldSpec::optional("mode", "Mode", FieldKind::Enum(&["replace", "extract"]))
                 .with_default("replace"),
+            // The regex crate's own replacement syntax uses ${group}, which
+            // would collide with pipe-param interpolation.
             FieldSpec::optional("replacement", "Replacement ($1, $name)", FieldKind::Text)
-                .with_default(""),
+                .with_default("")
+                .no_interpolation(),
         ])
     }
 

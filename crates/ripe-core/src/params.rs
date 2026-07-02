@@ -90,6 +90,9 @@ pub struct FieldSpec {
     pub kind: FieldKind,
     pub required: bool,
     pub default: Option<serde_json::Value>,
+    /// Whether `${name}` pipe-param references are expanded in this field.
+    /// Off for fields whose own syntax uses `${...}` (regex replacements).
+    pub interpolate: bool,
 }
 
 impl FieldSpec {
@@ -100,6 +103,7 @@ impl FieldSpec {
             kind,
             required: true,
             default: None,
+            interpolate: true,
         }
     }
 
@@ -110,11 +114,17 @@ impl FieldSpec {
             kind,
             required: false,
             default: None,
+            interpolate: true,
         }
     }
 
     pub fn with_default(mut self, default: impl Into<serde_json::Value>) -> Self {
         self.default = Some(default.into());
+        self
+    }
+
+    pub fn no_interpolation(mut self) -> Self {
+        self.interpolate = false;
         self
     }
 }

@@ -3,6 +3,7 @@
 //! UI-free by design: both the TUI (`ripe`) and the headless runner
 //! (`ripe-run`) sit on top of this crate.
 
+pub mod bind;
 pub mod engine;
 pub mod expr;
 pub mod fetch;
@@ -12,6 +13,7 @@ pub mod logging;
 pub mod module;
 pub mod params;
 
+pub use bind::{Bindings, PipeParam, PipeParamKind};
 pub use engine::{Engine, EngineConfig, EvalCache, EvalReport, NodeStatus};
 pub use graph::{Edge, Node, NodeId, Pipe};
 pub use item::{Item, PortSpec, PortType, PortValue};

@@ -166,7 +166,7 @@ impl Engine {
         report: &mut EvalReport,
     ) {
         // Phase 1 (sync): decide each node's fate — Unready, Cached, or run.
-        let mut to_run: Vec<(NodeId, u64, Ins)> = Vec::new();
+        let mut to_run: Vec<(NodeId, u64, Ins, crate::params::Params)> = Vec::new();
         for &id in wave {
             let node = pipe.node(id).expect("layer ids come from the pipe");
             let module = self.registry.get(&node.kind).expect("validated");
@@ -184,13 +184,35 @@ impl Engine {
                     );
                 }
                 Ok((ins, upstream_hashes)) => {
+                    // Expand ${name} pipe params first: the memo key must
+                    // hash the *resolved* params, so a `--param` change
+                    // invalidates exactly the nodes that reference it.
+                    let params = match crate::bind::interpolate_params(
+                        &node.params,
+                        &module.param_schema(),
+                        &ctx.bindings,
+                    ) {
+                        Ok(params) => params,
+                        Err(e) => {
+                            report.nodes.insert(
+                                id,
+                                NodeReport {
+                                    status: NodeStatus::Err,
+                                    error: Some(e),
+                                    duration: Duration::ZERO,
+                                    item_count: None,
+                                },
+                            );
+                            continue;
+                        }
+                    };
                     let is_source = module.inputs().is_empty();
                     let ttl_bucket = is_source.then(|| {
                         ctx.now.timestamp() / self.config.source_ttl.as_secs().max(1) as i64
                     });
                     let key = content_hash(&MemoKey {
                         kind: &node.kind,
-                        params: &node.params,
+                        params: &params,
                         upstream: &upstream_hashes,
                         ttl_bucket,
                     });
@@ -206,19 +228,19 @@ impl Engine {
                             },
                         );
                     } else {
-                        to_run.push((id, key, ins));
+                        to_run.push((id, key, ins, params));
                     }
                 }
             }
         }
 
         // Phase 2 (async): run the remaining nodes concurrently.
-        let futures = to_run.into_iter().map(|(id, key, ins)| {
+        let futures = to_run.into_iter().map(|(id, key, ins, params)| {
             let node = pipe.node(id).expect("checked above");
             let module = self.registry.get(&node.kind).expect("validated").clone();
             async move {
                 let started = std::time::Instant::now();
-                let result = module.eval(ctx, ins, &node.params).await;
+                let result = module.eval(ctx, ins, &params).await;
                 (id, key, started.elapsed(), result)
             }
         });
@@ -333,6 +355,7 @@ mod tests {
         EvalCtx {
             http: FetchClient::default(),
             now,
+            bindings: crate::bind::Bindings::empty(),
         }
     }
 
@@ -483,5 +506,90 @@ mod tests {
         let mut cache = EvalCache::new();
         let err = engine.eval(&pipe, &mut cache, &ctx()).await.unwrap_err();
         assert!(err.to_string().contains("cycle"), "{err}");
+    }
+
+    // --- M5: pipe params -------------------------------------------------
+
+    use crate::bind::{Bindings, PipeParam, PipeParamKind};
+
+    #[tokio::test]
+    async fn pipe_param_binds_fetch_url_at_run_time() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/feed"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"<?xml version="1.0"?><rss version="2.0"><channel><title>c</title>
+                <item><title>bound</title></item></channel></rss>"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let mut pipe = Pipe::new("param-bound");
+        pipe.params.push(PipeParam::new("url", PipeParamKind::Url));
+        let fetch = pipe.add_node("fetch_feed", Params::new().with("url", "${url}"));
+        let out = pipe.add_node("output", Params::new());
+        pipe.connect(fetch, "out", out, "in");
+
+        let bindings = Bindings::resolve(
+            &pipe.params,
+            &[("url".to_string(), format!("{}/feed", server.uri()))],
+        )
+        .unwrap();
+        let engine = Engine::new(Arc::new(crate::module::Registry::with_builtins()));
+        let mut cache = EvalCache::new();
+        let ctx = EvalCtx::new(FetchClient::default()).with_bindings(bindings);
+        let report = engine.eval(&pipe, &mut cache, &ctx).await.unwrap();
+        assert_eq!(report.status(fetch), Some(&NodeStatus::Ok), "{report:?}");
+        let stream = cache.output(pipe.output_node().unwrap()).unwrap();
+        assert_eq!(stream.item_count(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn binding_change_invalidates_only_referencing_nodes() {
+        let (registry, _) = test_registry();
+        let engine = Engine::new(Arc::new(registry));
+        let mut pipe = Pipe::new("bound");
+        pipe.params
+            .push(PipeParam::new("tag", PipeParamKind::Text).with_default("a"));
+        let src = pipe.add_node("test_source", items_param());
+        let pass = pipe.add_node("test_pass", Params::new().with("tag", "${tag}"));
+        pipe.connect(src, "out", pass, "in");
+
+        let now = chrono::Utc::now();
+        let mut cache = EvalCache::new();
+        let ctx1 = ctx_at(now).with_bindings(Bindings::resolve(&pipe.params, &[]).unwrap());
+        engine.eval(&pipe, &mut cache, &ctx1).await.unwrap();
+
+        let ctx2 = ctx_at(now).with_bindings(
+            Bindings::resolve(&pipe.params, &[("tag".to_string(), "b".to_string())]).unwrap(),
+        );
+        let report = engine.eval(&pipe, &mut cache, &ctx2).await.unwrap();
+        assert_eq!(report.status(src), Some(&NodeStatus::Cached));
+        assert_eq!(
+            report.status(pass),
+            Some(&NodeStatus::Ok),
+            "binding changed"
+        );
+
+        let report = engine.eval(&pipe, &mut cache, &ctx2).await.unwrap();
+        assert_eq!(
+            report.status(pass),
+            Some(&NodeStatus::Cached),
+            "same binding"
+        );
+    }
+
+    #[tokio::test]
+    async fn undeclared_param_ref_is_rejected_at_validation() {
+        let (registry, _) = test_registry();
+        let engine = Engine::new(Arc::new(registry));
+        let mut pipe = Pipe::new("bad-ref");
+        pipe.add_node("test_source", Params::new().with("items", "${nope}"));
+        let mut cache = EvalCache::new();
+        let err = engine.eval(&pipe, &mut cache, &ctx()).await.unwrap_err();
+        assert!(err.to_string().contains("undeclared pipe param"), "{err}");
     }
 }

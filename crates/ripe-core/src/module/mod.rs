@@ -16,6 +16,7 @@ mod op_sort;
 mod op_transform;
 mod op_union;
 mod op_unique;
+mod output;
 mod source_csv;
 mod source_feed;
 mod source_json;
@@ -28,6 +29,7 @@ pub use op_sort::Sort;
 pub use op_transform::Transform;
 pub use op_union::Union;
 pub use op_unique::Unique;
+pub use output::Output;
 pub use source_csv::FetchCsv;
 pub use source_feed::FetchFeed;
 pub use source_json::FetchJson;
@@ -48,6 +50,9 @@ pub struct EvalCtx {
     pub http: crate::fetch::FetchClient,
     /// Snapshot of "now", taken once per engine run.
     pub now: chrono::DateTime<chrono::Utc>,
+    /// Pipe-param values for this run; the engine expands `${name}` refs
+    /// before params reach a module.
+    pub bindings: crate::bind::Bindings,
 }
 
 impl EvalCtx {
@@ -55,7 +60,13 @@ impl EvalCtx {
         Self {
             http,
             now: chrono::Utc::now(),
+            bindings: crate::bind::Bindings::empty(),
         }
+    }
+
+    pub fn with_bindings(mut self, bindings: crate::bind::Bindings) -> Self {
+        self.bindings = bindings;
+        self
     }
 }
 
@@ -164,6 +175,7 @@ impl Registry {
         r.register(Arc::new(Union));
         r.register(Arc::new(Transform));
         r.register(Arc::new(RegexOp));
+        r.register(Arc::new(Output));
         r
     }
 
@@ -198,6 +210,7 @@ pub mod test_support {
         EvalCtx {
             http: crate::fetch::FetchClient::default(),
             now,
+            bindings: crate::bind::Bindings::empty(),
         }
     }
 
