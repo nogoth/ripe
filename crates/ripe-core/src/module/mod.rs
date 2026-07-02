@@ -8,13 +8,39 @@ use std::sync::Arc;
 use crate::item::{Item, PortSpec, PortValue};
 use crate::params::{ParamSchema, Params};
 
+mod op_filter;
+mod op_limit;
+mod op_regex;
+mod op_reverse;
+mod op_sort;
+mod op_transform;
+mod op_union;
+mod op_unique;
 mod source_csv;
 mod source_feed;
 mod source_json;
 
+pub use op_filter::Filter;
+pub use op_limit::{Limit, Tail};
+pub use op_regex::RegexOp;
+pub use op_reverse::Reverse;
+pub use op_sort::Sort;
+pub use op_transform::Transform;
+pub use op_union::Union;
+pub use op_unique::Unique;
 pub use source_csv::FetchCsv;
 pub use source_feed::FetchFeed;
 pub use source_json::FetchJson;
+
+/// Port specs shared by the common `Items -> Items` operator shape.
+pub(crate) const ITEMS_IN: &[crate::item::PortSpec] = &[crate::item::PortSpec::required(
+    "in",
+    crate::item::PortType::Items,
+)];
+pub(crate) const ITEMS_OUT: &[crate::item::PortSpec] = &[crate::item::PortSpec::required(
+    "out",
+    crate::item::PortType::Items,
+)];
 
 /// Everything a module may need during evaluation. Injected (rather than
 /// global) so tests can pin the clock and point HTTP at a mock server.
@@ -123,12 +149,21 @@ impl Registry {
         Self::default()
     }
 
-    /// All built-in modules (sources for now; operators land in M4).
+    /// All built-in modules.
     pub fn with_builtins() -> Self {
         let mut r = Self::new();
         r.register(Arc::new(FetchFeed));
         r.register(Arc::new(FetchJson));
         r.register(Arc::new(FetchCsv));
+        r.register(Arc::new(Filter));
+        r.register(Arc::new(Sort));
+        r.register(Arc::new(Limit));
+        r.register(Arc::new(Tail));
+        r.register(Arc::new(Unique));
+        r.register(Arc::new(Reverse));
+        r.register(Arc::new(Union));
+        r.register(Arc::new(Transform));
+        r.register(Arc::new(RegexOp));
         r
     }
 
@@ -157,6 +192,53 @@ pub mod test_support {
     use super::*;
     use crate::item::PortType;
     use crate::params::{FieldKind, FieldSpec};
+
+    /// EvalCtx with a pinned clock (no HTTP mocking; operator tests don't fetch).
+    pub fn ctx_at(now: chrono::DateTime<chrono::Utc>) -> EvalCtx {
+        EvalCtx {
+            http: crate::fetch::FetchClient::default(),
+            now,
+        }
+    }
+
+    /// Items from a JSON array literal.
+    pub fn items_json(v: serde_json::Value) -> Vec<Item> {
+        v.as_array()
+            .expect("array literal")
+            .iter()
+            .map(|v| Item(v.as_object().expect("object items").clone()))
+            .collect()
+    }
+
+    /// Run an `Items -> Items` operator on `input` with a pinned clock.
+    pub async fn run_op_at(
+        module: &dyn Module,
+        input: Vec<Item>,
+        params: Params,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<Vec<Item>> {
+        let mut ins = Ins::default();
+        ins.push("in", PortValue::Items(input));
+        let outs = module.eval(&ctx_at(now), ins, &params).await?;
+        match outs.get("out") {
+            Some(PortValue::Items(items)) => Ok(items.clone()),
+            other => anyhow::bail!("expected items on `out`, got {other:?}"),
+        }
+    }
+
+    /// As [`run_op_at`] with an arbitrary clock.
+    pub async fn run_op(
+        module: &dyn Module,
+        input: Vec<Item>,
+        params: Params,
+    ) -> anyhow::Result<Vec<Item>> {
+        run_op_at(module, input, params, chrono::Utc::now()).await
+    }
+
+    /// Titles of `items`, for terse assertions.
+    pub fn titles(items: &[Item]) -> Vec<String> {
+        items.iter().filter_map(|i| i.get_str("title")).collect()
+    }
 
     /// Source that emits the items given in its `items` param.
     pub struct StaticSource;

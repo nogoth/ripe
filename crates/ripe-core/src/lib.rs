@@ -4,6 +4,7 @@
 //! (`ripe-run`) sit on top of this crate.
 
 pub mod engine;
+pub mod expr;
 pub mod fetch;
 pub mod graph;
 pub mod item;
