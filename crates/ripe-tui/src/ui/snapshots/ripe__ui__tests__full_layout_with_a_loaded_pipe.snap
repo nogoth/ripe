@@ -1,0 +1,44 @@
+---
+source: crates/ripe-tui/src/ui/mod.rs
+expression: "render_to_string(&app, 120, 40)"
+---
+ PIPES   EDIT  RUN  VIEW  HELP                               news_pipeline.pipe                               ● 3 nodes
+┏Palette━━━━━━━━━━━━━┓┌Canvas─────────────────────────────────────────────────────────┐┌Preview────────────────────────┐
+┃NODES               ┃│pipe: news_pipeline                                            ││ FEED    ITEMS    RAW          │
+┃  filter           t┃│3 node(s)                                                      ││                               │
+┃  limit            l┃│                                                               ││    M13: preview lands here    │
+┃  regex            r┃│M9: canvas rendering lands here                                ││                               │
+┃  reverse           ┃│                                                               ││                               │
+┃  sort             s┃│                                                               ││                               │
+┃  tail              ┃│                                                               ││                               │
+┃  transform        m┃│                                                               ││                               │
+┃  union            u┃│                                                               ││                               │
+┃  unique           q┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃SOURCES             ┃│                                                               ││                               │
+┃  fetch_csv         ┃│                                                               ││                               │
+┃  fetch_feed        ┃│                                                               ││                               │
+┃  fetch_json        ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃SINKS               ┃│                                                               ││                               │
+┃  output            ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││                               │
+┃                    ┃│                                                               ││               Auto refresh: on│
+┗━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────────────────────────────────────┘└───────────────────────────────┘
+ Mode: Normal                                                                         tab switch pane   ? help   q quit

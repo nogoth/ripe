@@ -1,0 +1,12 @@
+---
+source: crates/ripe-tui/src/ui/mod.rs
+expression: "render_to_string(&app, 60, 15)"
+---
+
+
+
+
+
+
+
+              terminal too small (need 80x24)
