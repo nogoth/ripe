@@ -4,9 +4,11 @@
 //! pane has focus, and the two global toggles (help overlay, quit). Selection,
 //! viewport, and per-node eval state arrive with the milestones that need them.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use ripe_core::{Pipe, Registry};
+use ripe_core::engine::NodeReport;
+use ripe_core::{NodeId, Pipe, Registry};
 
 /// Which pane holds keyboard focus. `Tab` walks them in this order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +43,15 @@ pub struct App {
     pub dirty: bool,
     /// The pane keyboard input is directed at.
     pub focus: Pane,
+    /// The node the canvas highlights and the preview will follow. Defaults
+    /// to the first node in topo order; `None` only for an empty pipe.
+    pub selected: Option<NodeId>,
+    /// Rows of canvas content scrolled off the top. The canvas keeps the
+    /// selection in view by nudging this on every draw.
+    pub scroll: u16,
+    /// Per-node eval status, drawn as the canvas status line. Empty until the
+    /// live-execution wiring (M12) fills it.
+    pub statuses: BTreeMap<NodeId, NodeReport>,
     /// Whether the help overlay is drawn over the layout.
     pub show_help: bool,
     /// Set once the event loop should tear down and restore the terminal.
@@ -59,15 +70,45 @@ impl App {
     }
 
     fn from_parts(registry: Registry, pipe: Pipe, path: Option<PathBuf>) -> Self {
+        let selected = pipe
+            .topo_order()
+            .ok()
+            .and_then(|order| order.first().copied());
         Self {
             registry,
             pipe,
             path,
             dirty: false,
             focus: Pane::Palette,
+            selected,
+            scroll: 0,
+            statuses: BTreeMap::new(),
             show_help: false,
             should_quit: false,
         }
+    }
+
+    /// Move the selection one step along topo order (`forward` = next node),
+    /// clamping at the ends rather than wrapping. Flow/branch-aware navigation
+    /// arrives in M10; this is the simple spine walk.
+    pub fn select_step(&mut self, forward: bool) {
+        let Ok(order) = self.pipe.topo_order() else {
+            return;
+        };
+        if order.is_empty() {
+            return;
+        }
+        let next = match self
+            .selected
+            .and_then(|id| order.iter().position(|&n| n == id))
+        {
+            Some(i) if forward => order[(i + 1).min(order.len() - 1)],
+            Some(i) => order[i.saturating_sub(1)],
+            // No (or stale) selection: land on an end.
+            None if forward => order[0],
+            None => order[order.len() - 1],
+        };
+        self.selected = Some(next);
     }
 
     /// The bare filename shown in the top bar; "untitled" before the first save.

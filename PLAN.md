@@ -405,6 +405,9 @@ should leave the tree compiling and tested.
 - **Done when:** editing the pipe updates all three tabs without UI jank.
 
 ### M14: Polish
+- [ ] Horizontal canvas overflow (found in M9 smoke test): a pipe with 3+
+      parallel branches clips off-screen right. Add horizontal scroll and/or
+      adaptive box width, plus a `→ more` indicator to match the vertical ones.
 - [ ] Help overlay (keymap) and a status-line hint system.
 - [ ] Command palette (fuzzy action search).
 - [ ] Undo/redo (snapshot or command stack over graph mutations).
