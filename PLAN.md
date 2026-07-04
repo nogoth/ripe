@@ -99,7 +99,7 @@ so bare `r` runs and `q` quits.
 | Filter expressions | hand-rolled parser | grammar is tiny (`field op value`, `now ± dur`); no crate needed |
 | Dates | `chrono` | parse `pubDate`, date modules, sorting |
 | Data model | `serde`, `serde_json` | item representation + persistence |
-| Graph algos | `petgraph` | topo sort, cycle detection |
+| Graph algos | hand-rolled Kahn | dropped `petgraph` in M10: keyboard stepping and eval waves need a *stable* topo tie order (by NodeId), which petgraph doesn't specify |
 | CLI | `clap` | headless runner args |
 | Text input widgets | `tui-textarea` | editable fields in the inspector |
 | Config/paths | `directories` | save dir, config dir |

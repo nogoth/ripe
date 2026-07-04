@@ -1,5 +1,6 @@
 ---
 source: crates/ripe-tui/src/ui/mod.rs
+assertion_line: 386
 expression: "render_to_string(&mut app, 120, 40)"
 ---
  PIPES   EDIT  RUN  VIEW  HELP                                   tall.pipe                                   ● 11 nodes
@@ -8,20 +9,20 @@ expression: "render_to_string(&mut app, 120, 40)"
 │  filter           t│┃               ▼                                               ┃│                               │
 │  limit            l│┃╭────────────────────────────╮                                 ┃│    M13: preview lands here    │
 │  regex            r│┃│5  Filter                   │                                 ┃│                               │
-│  reverse           │┃│(no rules)                  │                                 ┃│                               │
+│  reverse          e│┃│(no rules)                  │                                 ┃│                               │
 │  sort             s│┃╰────────────────────────────╯                                 ┃│                               │
-│  tail              │┃               ▼                                               ┃│                               │
+│  tail             i│┃               ▼                                               ┃│                               │
 │  transform        m│┃╭────────────────────────────╮                                 ┃│                               │
 │  union            u│┃│6  Filter                   │                                 ┃│                               │
 │  unique           q│┃│(no rules)                  │                                 ┃│                               │
 │                    │┃╰────────────────────────────╯                                 ┃│                               │
 │SOURCES             │┃               ▼                                               ┃│                               │
-│  fetch_csv         │┃╭────────────────────────────╮                                 ┃│                               │
-│  fetch_feed        │┃│7  Filter                   │                                 ┃│                               │
-│  fetch_json        │┃│(no rules)                  │                                 ┃│                               │
+│  fetch_csv        v│┃╭────────────────────────────╮                                 ┃│                               │
+│  fetch_feed       f│┃│7  Filter                   │                                 ┃│                               │
+│  fetch_json       j│┃│(no rules)                  │                                 ┃│                               │
 │                    │┃╰────────────────────────────╯                                 ┃│                               │
 │SINKS               │┃               ▼                                               ┃│                               │
-│  output            │┃╭────────────────────────────╮                                 ┃│                               │
+│  output           o│┃╭────────────────────────────╮                                 ┃│                               │
 │                    │┃│8  Filter                   │                                 ┃│                               │
 │                    │┃│(no rules)                  │                                 ┃│                               │
 │                    │┃╰────────────────────────────╯                                 ┃│                               │
@@ -41,4 +42,4 @@ expression: "render_to_string(&mut app, 120, 40)"
 │                    │┃║rss → stdout                ║                                 ┃│                               │
 │                    │┃╚════════════════════════════╝                                 ┃│               Auto refresh: on│
 └────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────┘
- Mode: Normal                                                              j/k move   tab switch pane   ? help   q quit
+ Mode: Normal                               a insert   d del   c connect   j/k move   tab switch pane   ? help   q quit

@@ -5,48 +5,83 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// A thing that happened, framed in the app's own vocabulary.
-///
-/// [`Msg::Key`] carries keys we recognized structurally but have no binding
-/// for yet — the panes claim them as editing lands in later milestones.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Msg {
+    // --- global ---------------------------------------------------------
     /// Move focus to the next pane.
     NextPane,
     /// Toggle the help overlay.
     ToggleHelp,
-    /// Dismiss a transient overlay (currently just help).
+    /// Dismiss / cancel the current modal or overlay (Esc).
     Dismiss,
     /// Tear down and exit.
     Quit,
-    /// A key with no binding yet.
-    Key(KeyEvent),
     /// The periodic timer fired (spinners, future async polling cadence).
     Tick,
+
+    // --- canvas editing (M10) -------------------------------------------
+    /// Save to the current path, or prompt if no path is set yet.
+    Save,
+    /// Prompt for a path and load.
+    Open,
+    /// Enter insert-pending mode (`a`).
+    InsertPending,
+    /// Complete an insert with the module kind whose letter was pressed.
+    InsertKind(char),
+    /// Delete the selected node (and its edges).
+    DeleteNode,
+    /// Delete the first edge *into* the selected node.
+    DeleteEdge,
+    /// Mark the selected node as the pending connect source.
+    BeginConnect,
+    /// Attempt to wire the pending source to the currently-selected node.
+    ConfirmConnect,
+    /// Move selection one step downstream (`j`) or upstream (`k`).
+    StepFlow(bool),
+    /// Move selection left/right within the same layout row (`h`/`l`).
+    Lateral(bool),
+    /// Jump to the node whose badge number equals `n` (keys `1`–`9`).
+    SelectBadge(u64),
+
+    // --- path prompt (M10) ----------------------------------------------
+    /// Append a character while typing a file path.
+    PromptChar(char),
+    /// Delete the last character in the path prompt.
+    PromptBackspace,
+    /// Confirm the typed path.
+    PromptConfirm,
+
+    /// A key with no binding in the current context.
+    Key(KeyEvent),
 }
 
 /// Translate a terminal event into a [`Msg`], or `None` when it carries
-/// nothing the app acts on. Resize is a `None`: the loop redraws every
-/// iteration regardless, so the new size is picked up on the next frame.
+/// nothing the app acts on. Resize is `None`: the loop redraws every
+/// iteration so the new size is picked up on the next frame.
 pub fn from_event(event: Event) -> Option<Msg> {
     match event {
-        // Windows reports both press and release; act on presses only so a
-        // binding never fires twice.
         Event::Key(key) if key.kind == KeyEventKind::Press => Some(from_key(key)),
         _ => None,
     }
 }
 
-/// Map a single key press to a [`Msg`]. `q` quits and `Ctrl-C` quits from
-/// anywhere; the leader-based insert keys (PLAN.md) arrive in M10.
+/// Map a single key press to a [`Msg`]. Most context-dependent keys (insert
+/// letters, delete, connect) fall through as [`Msg::Key`] so `update` can
+/// dispatch them based on the current mode and focused pane.
 pub fn from_key(key: KeyEvent) -> Msg {
-    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-        return Msg::Quit;
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return match key.code {
+            KeyCode::Char('c') => Msg::Quit,
+            KeyCode::Char('s') => Msg::Save,
+            KeyCode::Char('o') => Msg::Open,
+            _ => Msg::Key(key),
+        };
     }
     match key.code {
         KeyCode::Tab => Msg::NextPane,
         KeyCode::Char('?') => Msg::ToggleHelp,
-        KeyCode::Char('q') => Msg::Quit,
         KeyCode::Esc => Msg::Dismiss,
+        // All other keys are context-dependent; update() reads the mode.
         _ => Msg::Key(key),
     }
 }
@@ -59,24 +94,31 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::empty())
     }
 
+    fn ctrl(ch: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL)
+    }
+
     #[test]
-    fn bindings_map_to_their_messages() {
+    fn global_bindings_map_to_their_messages() {
         assert_eq!(from_key(key(KeyCode::Tab)), Msg::NextPane);
         assert_eq!(from_key(key(KeyCode::Char('?'))), Msg::ToggleHelp);
-        assert_eq!(from_key(key(KeyCode::Char('q'))), Msg::Quit);
         assert_eq!(from_key(key(KeyCode::Esc)), Msg::Dismiss);
+        assert_eq!(from_key(ctrl('c')), Msg::Quit);
+        assert_eq!(from_key(ctrl('s')), Msg::Save);
+        assert_eq!(from_key(ctrl('o')), Msg::Open);
     }
 
     #[test]
-    fn ctrl_c_quits() {
-        let ev = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(from_key(ev), Msg::Quit);
-    }
-
-    #[test]
-    fn unbound_key_falls_through_to_key() {
-        let ev = key(KeyCode::Char('x'));
-        assert_eq!(from_key(ev), Msg::Key(ev));
+    fn q_and_editing_keys_fall_through_to_key() {
+        // q, a, d, x, c, j, k, h, l, 1-9 are all context-dependent.
+        for ch in ['q', 'a', 'd', 'x', 'c', 'j', 'k', 'h', 'l', '1', '5', '9'] {
+            let ev = key(KeyCode::Char(ch));
+            assert_eq!(
+                from_key(ev),
+                Msg::Key(ev),
+                "char '{ch}' should fall through"
+            );
+        }
     }
 
     #[test]

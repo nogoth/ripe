@@ -3,9 +3,8 @@
 //! Grouping is derived from the live [`Registry`], not a hardcoded list, so
 //! the palette can never disagree with what the engine can actually build:
 //! a module with no inputs is a source, the `output` kind is a sink, and
-//! everything else is an operator node. Node rows show their insert letter
-//! (PLAN.md `a <letter>`); sources and sinks are letter-less until M10 wires
-//! their insert flow.
+//! everything else is an operator node. Every row shows its insert letter
+//! (`a <letter>`) so the user does not have to memorise the keymap.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -18,11 +17,31 @@ use ripe_core::Registry;
 use crate::app::App;
 use crate::ui::pane_block;
 
-/// The insert letter for a node kind, per the mockup / PLAN.md keymap. `None`
-/// for kinds reached another way (sources, sinks) — those list without a
-/// letter for now.
+/// The insert letter for a node kind, per PLAN.md keybindings table.
+///
+/// Letters are assigned to avoid collisions with:
+/// - global keys: Tab, ?, Esc, Ctrl-C/S/O
+/// - canvas normal-mode keys: a (leader), d, x, c, j, k, h, l, q, 1-9
+///
+/// Assignments:
+/// | letter | kind        |
+/// |--------|-------------|
+/// | t      | filter      |
+/// | r      | regex       |
+/// | m      | transform   |
+/// | s      | sort        |
+/// | u      | union       |
+/// | q      | unique      | (collision with quit is safe: a+q is the leader sequence)
+/// | l      | limit       |
+/// | o      | output      |
+/// | f      | fetch_feed  |
+/// | j      | fetch_json  | (collision with down is safe: only active after `a`)
+/// | v      | fetch_csv   |
+/// | i      | tail        |
+/// | e      | reverse     |
 pub fn insert_letter(kind: &str) -> Option<char> {
     Some(match kind {
+        // Operators (shown in NODES group)
         "filter" => 't',
         "regex" => 'r',
         "transform" => 'm',
@@ -30,6 +49,13 @@ pub fn insert_letter(kind: &str) -> Option<char> {
         "union" => 'u',
         "unique" => 'q',
         "limit" => 'l',
+        "tail" => 'i',
+        "reverse" => 'e',
+        // Sources
+        "fetch_feed" => 'f',
+        "fetch_json" => 'j',
+        "fetch_csv" => 'v',
+        // Sinks
         "output" => 'o',
         _ => return None,
     })
@@ -69,34 +95,27 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App, focused: bool) {
     let width = inner.width as usize;
     let groups = grouped(&app.registry);
     let mut lines = Vec::new();
-    push_group(&mut lines, "NODES", &groups.nodes, width, true);
+    // All three groups now show insert letters.
+    push_group(&mut lines, "NODES", &groups.nodes, width);
     lines.push(Line::raw(""));
-    push_group(&mut lines, "SOURCES", &groups.sources, width, false);
+    push_group(&mut lines, "SOURCES", &groups.sources, width);
     lines.push(Line::raw(""));
-    push_group(&mut lines, "SINKS", &groups.sinks, width, false);
+    push_group(&mut lines, "SINKS", &groups.sinks, width);
 
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn push_group(
-    lines: &mut Vec<Line<'static>>,
-    header: &str,
-    kinds: &[&'static str],
-    width: usize,
-    with_letters: bool,
-) {
+fn push_group(lines: &mut Vec<Line<'static>>, header: &str, kinds: &[&'static str], width: usize) {
     lines.push(Line::from(Span::styled(
         header.to_string(),
         Style::new().fg(Color::Gray).add_modifier(Modifier::BOLD),
     )));
     for &kind in kinds {
-        let letter = with_letters.then(|| insert_letter(kind)).flatten();
-        lines.push(entry_line(kind, letter, width));
+        lines.push(entry_line(kind, insert_letter(kind), width));
     }
 }
 
-/// One catalog row: kind on the left, insert letter (when it has one) pushed
-/// to the right edge, mockup-style.
+/// One catalog row: kind on the left, insert letter pushed to the right edge.
 fn entry_line(kind: &str, letter: Option<char>, width: usize) -> Line<'static> {
     let name = format!("  {kind}");
     match letter {

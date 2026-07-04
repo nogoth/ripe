@@ -8,7 +8,7 @@
 
 mod canvas;
 pub(crate) mod layout;
-mod palette;
+pub(crate) mod palette;
 mod preview;
 
 use ratatui::Frame;
@@ -17,7 +17,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 
-use crate::app::{App, Pane};
+use crate::app::{App, Mode, Pane, PathAction};
 
 /// Smallest terminal we lay the full editor out in. Under this we draw a
 /// notice rather than a mangled frame.
@@ -55,7 +55,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     canvas::render(frame, cols[1], app, focus == Pane::Canvas);
     preview::render(frame, cols[2], app, focus == Pane::Preview);
 
-    status_line(frame, rows[2], focus);
+    status_line(frame, rows[2], app);
 
     if app.show_help {
         help_overlay(frame, area);
@@ -115,25 +115,51 @@ fn top_bar(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(nodes), chunks[2]);
 }
 
-fn status_line(frame: &mut Frame, area: Rect, focus: Pane) {
-    let mode = Line::from(vec![
+fn status_line(frame: &mut Frame, area: Rect, app: &App) {
+    // Path prompt: the whole status line becomes a single-line text input.
+    if let Mode::PromptPath { action, buf } = &app.mode {
+        let label = match action {
+            PathAction::Save => "Save to: ",
+            PathAction::Open => "Open: ",
+        };
+        let text = format!(" {label}{buf}█");
+        frame.render_widget(
+            Paragraph::new(text).style(Style::new().fg(Color::White)),
+            area,
+        );
+        return;
+    }
+
+    // Normal / other modes: left side shows the mode tag and status message,
+    // right side shows contextual key hints.
+    let (mode_label, mode_color) = match &app.mode {
+        Mode::Normal => ("Normal", Color::Green),
+        Mode::InsertPending => ("Insert", Color::Yellow),
+        Mode::Connecting { .. } => ("Connect", Color::Cyan),
+        Mode::QuitGuard => ("Quit?", Color::Red),
+        Mode::PromptPath { .. } => unreachable!(),
+    };
+
+    let left = Line::from(vec![
         Span::raw(" Mode: "),
         Span::styled(
-            "Normal",
-            Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
+            mode_label,
+            Style::new().fg(mode_color).add_modifier(Modifier::BOLD),
         ),
+        Span::raw("  "),
+        Span::raw(app.status.clone()),
     ]);
-    // Contextual keys depend on the focused pane; the canvas advertises its
-    // selection motions.
-    let keys = match focus {
-        Pane::Canvas => "j/k move   tab switch pane   ? help   q quit ",
-        _ => "tab switch pane   ? help   q quit ",
+
+    let keys = if app.focus == Pane::Canvas {
+        "a insert   d del   c connect   j/k move   tab switch pane   ? help   q quit "
+    } else {
+        "tab switch pane   ? help   q quit "
     };
     let hints = Line::from(keys).alignment(Alignment::Right);
 
     let chunks = Layout::horizontal([Constraint::Min(0), Constraint::Length(hints.width() as u16)])
         .split(area);
-    frame.render_widget(Paragraph::new(mode), chunks[0]);
+    frame.render_widget(Paragraph::new(left), chunks[0]);
     frame.render_widget(Paragraph::new(hints), chunks[1]);
 }
 

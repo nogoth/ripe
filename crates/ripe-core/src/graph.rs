@@ -125,6 +125,17 @@ impl Pipe {
         self.edges.retain(|e| e.from.node != id && e.to.node != id);
     }
 
+    /// Remove all edges whose endpoints exactly match the given ports.
+    /// A no-op if no such edge exists.
+    pub fn remove_edge(&mut self, from: NodeId, from_port: &str, to: NodeId, to_port: &str) {
+        self.edges.retain(|e| {
+            !(e.from.node == from
+                && e.from.port == from_port
+                && e.to.node == to
+                && e.to.port == to_port)
+        });
+    }
+
     /// Incoming edges for `node`, in `edges` order.
     pub fn edges_into(&self, node: NodeId) -> impl Iterator<Item = &Edge> {
         self.edges.iter().filter(move |e| e.to.node == node)
@@ -228,20 +239,52 @@ impl Pipe {
     }
 
     /// Node ids in dependency order. `Err` carries a node on a cycle.
+    ///
+    /// The order is *stable*: among nodes whose dependencies are equally
+    /// satisfied, lower ids come first (Kahn's algorithm with a min-heap).
+    /// Keyboard stepping over unwired nodes and eval-wave ordering both
+    /// rely on this being deterministic — an unspecified tie order made
+    /// j/k walk backwards on an edgeless canvas.
     pub fn topo_order(&self) -> Result<Vec<NodeId>, NodeId> {
-        let mut g = petgraph::graph::DiGraph::<NodeId, ()>::new();
-        let mut idx = HashMap::new();
-        for node in &self.nodes {
-            idx.insert(node.id, g.add_node(node.id));
-        }
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+
+        let mut indegree: BTreeMap<NodeId, usize> = self.nodes.iter().map(|n| (n.id, 0)).collect();
         for edge in &self.edges {
-            if let (Some(&a), Some(&b)) = (idx.get(&edge.from.node), idx.get(&edge.to.node)) {
-                g.add_edge(a, b, ());
+            // Edges with missing endpoints are validation's problem, not ours.
+            if indegree.contains_key(&edge.from.node)
+                && let Some(d) = indegree.get_mut(&edge.to.node)
+            {
+                *d += 1;
             }
         }
-        petgraph::algo::toposort(&g, None)
-            .map(|order| order.into_iter().map(|i| g[i]).collect())
-            .map_err(|cycle| g[cycle.node_id()])
+        let mut ready: BinaryHeap<Reverse<NodeId>> = indegree
+            .iter()
+            .filter(|&(_, d)| *d == 0)
+            .map(|(id, _)| Reverse(*id))
+            .collect();
+        let mut order = Vec::with_capacity(self.nodes.len());
+        while let Some(Reverse(id)) = ready.pop() {
+            order.push(id);
+            for edge in self.edges.iter().filter(|e| e.from.node == id) {
+                if let Some(d) = indegree.get_mut(&edge.to.node) {
+                    *d -= 1;
+                    if *d == 0 {
+                        ready.push(Reverse(edge.to.node));
+                    }
+                }
+            }
+        }
+        if order.len() == self.nodes.len() {
+            Ok(order)
+        } else {
+            let on_cycle = indegree
+                .keys()
+                .find(|id| !order.contains(id))
+                .copied()
+                .expect("some node was not emitted");
+            Err(on_cycle)
+        }
     }
 
     /// Layer index per node: sources at 0, every other node one past its
@@ -284,6 +327,19 @@ mod tests {
     }
 
     #[test]
+    fn topo_order_is_stable_for_unwired_nodes() {
+        let mut pipe = Pipe::new("t");
+        let a = pipe.add_node("test_pass", Params::new());
+        let b = pipe.add_node("test_pass", Params::new());
+        let c = pipe.add_node("test_source", Params::new());
+        // No edges: pure id order, not an implementation accident.
+        assert_eq!(pipe.topo_order().unwrap(), vec![a, b, c]);
+        // An edge reorders only what it must; ties stay in id order.
+        pipe.connect(c, "out", b, "in");
+        assert_eq!(pipe.topo_order().unwrap(), vec![a, c, b]);
+    }
+
+    #[test]
     fn cycle_is_rejected() {
         let (registry, _) = test_registry();
         let mut pipe = Pipe::new("t");
@@ -318,6 +374,24 @@ mod tests {
             errors.iter().any(|e| e.contains("no such output port")),
             "{errors:?}"
         );
+    }
+
+    #[test]
+    fn remove_edge_removes_matching_edge_only() {
+        let mut pipe = Pipe::new("t");
+        let a = pipe.add_node("test_source", Params::new());
+        let b = pipe.add_node("test_pass", Params::new());
+        let c = pipe.add_node("test_pass", Params::new());
+        pipe.connect(a, "out", b, "in");
+        pipe.connect(a, "out", c, "in");
+        assert_eq!(pipe.edges.len(), 2);
+        pipe.remove_edge(a, "out", b, "in");
+        assert_eq!(pipe.edges.len(), 1);
+        // The remaining edge is to c.
+        assert_eq!(pipe.edges[0].to.node, c);
+        // Second remove of the same (now-absent) edge is a no-op.
+        pipe.remove_edge(a, "out", b, "in");
+        assert_eq!(pipe.edges.len(), 1);
     }
 
     #[test]
