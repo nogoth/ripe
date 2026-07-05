@@ -408,6 +408,10 @@ should leave the tree compiling and tested.
 - [ ] Horizontal canvas overflow (found in M9 smoke test): a pipe with 3+
       parallel branches clips off-screen right. Add horizontal scroll and/or
       adaptive box width, plus a `→ more` indicator to match the vertical ones.
+- [ ] Global quit (found in M12 smoke test): `q` only quits when the canvas
+      pane has focus, but every pane's status line advertises `q quit`. Either
+      handle `q` before the canvas-focus gate (as `r`/`R` now are) or fix the
+      hints.
 - [ ] Help overlay (keymap) and a status-line hint system.
 - [ ] Command palette (fuzzy action search).
 - [ ] Undo/redo (snapshot or command stack over graph mutations).
