@@ -1,14 +1,14 @@
 ---
 source: crates/ripe-tui/src/ui/mod.rs
-assertion_line: 420
+assertion_line: 423
 expression: "render_to_string(&mut app, 120, 40)"
 ---
  PIPES   EDIT  RUN  VIEW  HELP                                   tall.pipe                                   ● 11 nodes
 ┌Palette─────────────┐┏Canvas━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┌Preview────────────────────────┐
-│NODES               │┃╰───────────────────────────↑ more                             ┃│ FEED    ITEMS    RAW          │
+│NODES               │┃╰───────────────────────────↑ more                             ┃│ FEED    ITEMS (0)    RAW      │
 │  filter           t│┃               ▼                                               ┃│                               │
-│  limit            l│┃╭────────────────────────────╮                                 ┃│    M13: preview lands here    │
-│  regex            r│┃│5  Filter                   │                                 ┃│                               │
+│  limit            l│┃╭────────────────────────────╮                                 ┃│No preview yet — press r to run│
+│  regex            r│┃│5  Filter                   │                                 ┃│           the pipe.           │
 │  reverse          e│┃│(no rules)                  │                                 ┃│                               │
 │  sort             s│┃╰────────────────────────────╯                                 ┃│                               │
 │  tail             i│┃               ▼                                               ┃│                               │
@@ -40,6 +40,6 @@ expression: "render_to_string(&mut app, 120, 40)"
 │                    │┃╔════════════════════════════╗                                 ┃│                               │
 │                    │┃║11  Output                  ║                                 ┃│                               │
 │                    │┃║rss → stdout                ║                                 ┃│                               │
-│                    │┃╚════════════════════════════╝                                 ┃│               Auto refresh: on│
+│                    │┃╚════════════════════════════╝                                 ┃│ Rendered 0 i…Auto refresh: on │
 └────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────┘
  Mode: Normal                              a insert   d del   c connect   r run   j/k move   tab pane   ? help   q quit

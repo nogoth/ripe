@@ -1,13 +1,14 @@
 ---
 source: crates/ripe-tui/src/ui/mod.rs
+assertion_line: 462
 expression: "render_to_string(&mut app, 120, 40)"
 ---
  PIPES   EDIT  RUN  VIEW  HELP                                    snap.pipe                                   ● 1 nodes
 ┌Palette─────────────┐┏Canvas━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┌Preview────────────────────────┐
-│NODES               │┃╔════════════════════════════╗                                 ┃│ FEED    ITEMS    RAW          │
+│NODES               │┃╔════════════════════════════╗                                 ┃│ FEED    ITEMS (0)    RAW      │
 │  filter           t│┃║1  Filter                   ║                                 ┃│                               │
-│  limit            l│┃║score > 100                 ║                                 ┃│    M13: preview lands here    │
-│  regex            r│┃╚════════════════════════════╝                                 ┃│                               │
+│  limit            l│┃║score > 100                 ║                                 ┃│No preview yet — press r to run│
+│  regex            r│┃╚════════════════════════════╝                                 ┃│           the pipe.           │
 │  reverse          e│┃ ╔ node #1 (filter) ════════════════════════════════════════════════════╗                       │
 │  sort             s│┃ ║Rules (field op value) [rules]                                        ║                       │
 │  tail             i│┃ ║  score > 100                                                         ║                       │
@@ -39,6 +40,6 @@ expression: "render_to_string(&mut app, 120, 40)"
 │                    │┃                                                               ┃│                               │
 │                    │┃                                                               ┃│                               │
 │                    │┃                                                               ┃│                               │
-│                    │┃                                                               ┃│               Auto refresh: on│
+│                    │┃                                                               ┃│ Rendered 0 i…Auto refresh: on │
 └────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────┘
  Mode: Params                                                                     Ctrl-s apply   Esc cancel   ↑/↓ field

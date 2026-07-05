@@ -30,7 +30,9 @@ use tokio::task::JoinHandle;
 
 use ripe_core::engine::{Engine, EvalCache, EvalReport};
 use ripe_core::fetch::FetchClient;
-use ripe_core::{Bindings, EvalCtx, Registry, load_pipe};
+use ripe_core::format::Format;
+use ripe_core::preview::Preview;
+use ripe_core::{Bindings, EvalCtx, NodeStatus, Pipe, PortValue, Registry, load_pipe};
 
 use app::{App, EvalRequest, EvalScope};
 use event::Msg;
@@ -176,30 +178,73 @@ async fn spawn_eval(
     let EvalRequest { generation, scope } = request;
 
     *in_flight = Some(tokio::spawn(async move {
-        let outcome = {
+        // Hold the cache lock across the run *and* the preview extraction, so
+        // the Output node's stream is read while it is still guaranteed the
+        // one this run produced. The render thread never locks the cache; the
+        // finished snapshot travels back to `App` on the message instead.
+        let msg = {
             let mut guard = cache.lock().await;
-            match scope {
+            let outcome = match scope {
                 EvalScope::All => engine.eval(&pipe, &mut guard, &ctx).await,
                 EvalScope::UpTo(target) => {
                     engine.eval_upto(&pipe, &[target], &mut guard, &ctx).await
                 }
+            };
+            match outcome {
+                Ok(report) => {
+                    let preview = extract_preview(&pipe, &report, &guard, &ctx);
+                    Msg::EvalDone {
+                        generation,
+                        report,
+                        error: None,
+                        preview,
+                    }
+                }
+                Err(e) => Msg::EvalDone {
+                    generation,
+                    report: EvalReport::default(),
+                    error: Some(e.to_string()),
+                    preview: None,
+                },
             }
-        };
-        let msg = match outcome {
-            Ok(report) => Msg::EvalDone {
-                generation,
-                report,
-                error: None,
-            },
-            Err(e) => Msg::EvalDone {
-                generation,
-                report: EvalReport::default(),
-                error: Some(e.to_string()),
-            },
         };
         // The receiver only closes when the app is exiting; ignore that race.
         let _ = tx.send(msg);
     }));
+}
+
+/// Build the preview snapshot for the pipe's Output node, or `None` when this
+/// run did not (re)produce one — no output node, the node failed/was skipped,
+/// or a scoped "run to selected" that never reached it. The gate on the
+/// current run's status is what prevents a stale, previously-cached output
+/// stream from masquerading as fresh after an upstream edit broke the graph.
+fn extract_preview(
+    pipe: &Pipe,
+    report: &EvalReport,
+    cache: &EvalCache,
+    ctx: &EvalCtx,
+) -> Option<Preview> {
+    let output_id = pipe.output_node()?;
+    if !matches!(
+        report.status(output_id),
+        Some(NodeStatus::Ok | NodeStatus::Cached)
+    ) {
+        return None;
+    }
+    let outs = cache.output(output_id)?;
+    let items = match outs.get("out") {
+        Some(PortValue::Items(items)) => items,
+        _ => return None,
+    };
+    let node = pipe.node(output_id)?;
+    let format = node
+        .params
+        .get_str("format")
+        .and_then(|s| s.parse::<Format>().ok())
+        .unwrap_or(Format::Rss);
+    // Age formatting uses the run's `now`, so a snapshot is deterministic
+    // given the same clock the engine evaluated against.
+    Some(Preview::build(items, format, &pipe.name, ctx.now))
 }
 
 /// Install the panic hook, then enter raw mode + the alternate screen.

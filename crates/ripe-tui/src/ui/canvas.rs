@@ -399,8 +399,9 @@ fn draw_box(
 }
 
 /// Braille spinner frames; the app's tick counter selects the phase, so the
-/// glyph advances once per event-loop tick while a node is loading.
-fn spinner_frame(tick: u64) -> char {
+/// glyph advances once per event-loop tick while a node is loading. Shared
+/// with the preview footer's "evaluating…" indicator.
+pub(crate) fn spinner_frame(tick: u64) -> char {
     const FRAMES: [char; 8] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'];
     FRAMES[(tick as usize) % FRAMES.len()]
 }

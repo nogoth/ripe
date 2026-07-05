@@ -14,6 +14,7 @@ pub mod logging;
 pub mod module;
 pub mod params;
 pub mod persist;
+pub mod preview;
 
 pub use bind::{Bindings, PipeParam, PipeParamKind};
 pub use engine::{Engine, EngineConfig, EvalCache, EvalReport, NodeStatus};
@@ -23,3 +24,4 @@ pub use item::{Item, PortSpec, PortType, PortValue};
 pub use module::{EvalCtx, Module, Registry};
 pub use params::{ParamSchema, Params};
 pub use persist::{Loaded, PersistError, load_pipe, save_pipe};
+pub use preview::Preview;

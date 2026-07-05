@@ -21,6 +21,19 @@ pub enum Format {
     Csv,
 }
 
+impl Format {
+    /// The lowercase name of this format, matching the `Output` node's
+    /// `format` param values and [`Format::from_str`].
+    pub fn name(self) -> &'static str {
+        match self {
+            Format::Rss => "rss",
+            Format::Atom => "atom",
+            Format::Json => "json",
+            Format::Csv => "csv",
+        }
+    }
+}
+
 /// Error for a format name that isn't one of the four.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("unknown format `{0}` (expected rss, atom, json, or csv)")]

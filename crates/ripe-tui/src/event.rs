@@ -5,6 +5,7 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use ripe_core::EvalReport;
+use ripe_core::preview::Preview;
 
 /// A thing that happened, framed in the app's own vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,11 +29,15 @@ pub enum Msg {
     RunToSelected,
     /// An async eval finished. `generation` lets `update` discard the result
     /// if a newer run has since superseded it; `error` is set only when the
-    /// run failed structurally (an empty `report` accompanies it).
+    /// run failed structurally (an empty `report` accompanies it). `preview`
+    /// carries the Output node's freshly-serialized stream when the covered
+    /// run produced one, so the preview panel updates without the render
+    /// thread ever touching the eval cache.
     EvalDone {
         generation: u64,
         report: EvalReport,
         error: Option<String>,
+        preview: Option<Preview>,
     },
 
     // --- canvas editing (M10) -------------------------------------------

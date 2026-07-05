@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use ripe_core::engine::NodeReport;
 use ripe_core::params::{FieldKind, ParamSchema};
+use ripe_core::preview::Preview;
 use ripe_core::{NodeId, Pipe, Registry};
 
 use crate::ui::layout::Layout;
@@ -216,6 +217,81 @@ pub struct EvalState {
 /// before a debounced re-eval fires. Two ticks ≈ up to half a second.
 pub const DEBOUNCE_TICKS: u8 = 2;
 
+// ---- preview panel (M13) ------------------------------------------------
+
+/// Which tab the preview panel shows. `[` / `]` walk them when the preview
+/// pane holds focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewTab {
+    /// Channel-level metadata (title, link, description, counts).
+    Feed,
+    /// A card per item (title, domain, age, snippet).
+    Items,
+    /// The serialized feed, reusing `format.rs`.
+    Raw,
+}
+
+impl PreviewTab {
+    /// Zero-based position in the FEED / ITEMS / RAW tab bar.
+    pub fn index(self) -> usize {
+        match self {
+            PreviewTab::Feed => 0,
+            PreviewTab::Items => 1,
+            PreviewTab::Raw => 2,
+        }
+    }
+
+    /// The next tab (`]`), wrapping FEED -> ITEMS -> RAW -> FEED.
+    pub fn next(self) -> Self {
+        match self {
+            PreviewTab::Feed => PreviewTab::Items,
+            PreviewTab::Items => PreviewTab::Raw,
+            PreviewTab::Raw => PreviewTab::Feed,
+        }
+    }
+
+    /// The previous tab (`[`), wrapping the other way.
+    pub fn prev(self) -> Self {
+        match self {
+            PreviewTab::Feed => PreviewTab::Raw,
+            PreviewTab::Items => PreviewTab::Feed,
+            PreviewTab::Raw => PreviewTab::Items,
+        }
+    }
+}
+
+/// Everything the preview panel needs. The `snapshot` is precomputed off the
+/// render thread (see [`Preview`]) and swapped in wholesale on eval; the view
+/// never re-serializes or reads a clock.
+pub struct PreviewState {
+    /// The visible tab.
+    pub tab: PreviewTab,
+    /// When on, each re-eval refreshes the panel; when off, the last snapshot
+    /// is frozen (eval still runs — canvas statuses keep updating).
+    pub auto_refresh: bool,
+    /// Vertical scroll offset into the current tab's body, clamped by the view.
+    pub scroll: u16,
+    /// The last output stream rendered, or `None` before the first successful
+    /// run (or while an error is shown).
+    pub snapshot: Option<Preview>,
+    /// Set when the latest covered run could not produce an output stream:
+    /// the failing node + message, or a "no Output node" hint. Shown instead
+    /// of stale output.
+    pub error: Option<String>,
+}
+
+impl Default for PreviewState {
+    fn default() -> Self {
+        Self {
+            tab: PreviewTab::Items,
+            auto_refresh: true,
+            scroll: 0,
+            snapshot: None,
+            error: None,
+        }
+    }
+}
+
 /// The editor state. Owns the registry so the palette can group the real
 /// module list without threading it through the view.
 pub struct App {
@@ -248,6 +324,8 @@ pub struct App {
     pub edit_state: Option<EditParamsState>,
     /// Live-eval scheduling and per-node loading state (M12).
     pub eval: EvalState,
+    /// The preview panel: tab, auto-refresh, scroll, and last snapshot (M13).
+    pub preview: PreviewState,
     /// Monotonic tick counter, advanced on every `Msg::Tick`; drives the
     /// canvas spinner animation for loading nodes.
     pub tick_count: u64,
@@ -284,6 +362,7 @@ impl App {
             status: String::new(),
             edit_state: None,
             eval: EvalState::default(),
+            preview: PreviewState::default(),
             tick_count: 0,
         }
     }

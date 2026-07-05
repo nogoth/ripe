@@ -7,9 +7,10 @@ use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use ripe_core::EvalReport;
 use ripe_core::params::{FieldKind, Params};
 use ripe_core::persist::{load_pipe, save_pipe};
+use ripe_core::preview::Preview;
+use ripe_core::{EvalReport, NodeStatus};
 
 use crate::app::{
     App, DEBOUNCE_TICKS, EditParamsState, EvalRequest, EvalScope, FieldEditor, Mode, Pane,
@@ -38,7 +39,8 @@ pub fn update(app: &mut App, msg: Msg) {
             generation,
             report,
             error,
-        } => on_eval_done(app, generation, report, error),
+            preview,
+        } => on_eval_done(app, generation, report, error, preview),
 
         // In EditParams mode Ctrl-S applies params rather than saving the file.
         Msg::Save => {
@@ -146,6 +148,11 @@ fn on_key(app: &mut App, key: KeyEvent) {
                 KeyCode::Char('R') => return update(app, Msg::RunToSelected),
                 _ => {}
             }
+            // The preview pane owns its own key set (tabs, scroll, refresh).
+            if app.focus == Pane::Preview {
+                on_key_preview(app, key);
+                return;
+            }
             if app.focus != Pane::Canvas {
                 return;
             }
@@ -239,12 +246,26 @@ fn on_tick(app: &mut App) {
 /// Fold a finished eval into the model. A result whose `generation` is not the
 /// current one comes from a superseded run and is dropped — this is the guard
 /// that stops a slow, stale eval from clobbering fresher output.
-fn on_eval_done(app: &mut App, generation: u64, report: EvalReport, error: Option<String>) {
+fn on_eval_done(
+    app: &mut App,
+    generation: u64,
+    report: EvalReport,
+    error: Option<String>,
+    preview: Option<Preview>,
+) {
     if generation != app.eval.generation {
         return;
     }
     app.eval.running = false;
     app.eval.loading.clear();
+
+    // The preview refreshes only with auto-refresh on; the canvas statuses
+    // below always update, so the pipe keeps "running live" underneath a
+    // frozen panel.
+    if app.preview.auto_refresh {
+        apply_preview(app, &report, error.as_deref(), preview);
+    }
+
     if let Some(err) = error {
         app.status = format!("eval failed: {}", err.lines().next().unwrap_or("error"));
         return;
@@ -261,6 +282,116 @@ fn on_eval_done(app: &mut App, generation: u64, report: EvalReport, error: Optio
         "evaluated {count} node{}",
         if count == 1 { "" } else { "s" }
     );
+}
+
+/// Reconcile the preview panel with a finished run. Sets exactly one of
+/// `snapshot` / `error`, except when the run never covered the Output node
+/// (e.g. "run to selected" on a mid-pipe node), in which case the last
+/// preview is kept untouched.
+fn apply_preview(
+    app: &mut App,
+    report: &EvalReport,
+    error: Option<&str>,
+    preview: Option<Preview>,
+) {
+    if let Some(err) = error {
+        // A structural failure (cycle, bad kind) means the described pipe
+        // produced nothing — show it rather than stale output.
+        set_preview_error(app, err.lines().next().unwrap_or("eval error").to_string());
+        return;
+    }
+    if let Some(snapshot) = preview {
+        app.preview.snapshot = Some(snapshot);
+        app.preview.error = None;
+        app.preview.scroll = 0;
+        return;
+    }
+    let Some(output_id) = app.pipe.output_node() else {
+        set_preview_error(
+            app,
+            "No Output node. Add one (a then o) to preview the result.".to_string(),
+        );
+        return;
+    };
+    // The Output node failed or was blocked this run: name the culprit. If it
+    // was simply not part of this run (a scoped "run to selected"), leave the
+    // last preview untouched.
+    if matches!(
+        report.status(output_id),
+        Some(NodeStatus::Err | NodeStatus::Unready)
+    ) {
+        let msg = describe_failure(&app.pipe, report, output_id);
+        set_preview_error(app, msg);
+    }
+}
+
+fn set_preview_error(app: &mut App, message: String) {
+    app.preview.snapshot = None;
+    app.preview.error = Some(message);
+    app.preview.scroll = 0;
+}
+
+/// A one-line explanation of why the Output node has no stream: the first
+/// hard failure upstream (a fetch error), else the first blocked node, else a
+/// generic note. Node id + kind + message, so the preview names the culprit.
+fn describe_failure(
+    pipe: &ripe_core::Pipe,
+    report: &EvalReport,
+    output_id: ripe_core::NodeId,
+) -> String {
+    let culprit = report
+        .nodes
+        .iter()
+        .find(|(_, r)| r.status == NodeStatus::Err)
+        .or_else(|| {
+            report
+                .nodes
+                .iter()
+                .find(|(_, r)| r.status == NodeStatus::Unready)
+        });
+    match culprit {
+        Some((id, r)) => {
+            let kind = pipe.node(*id).map_or("?", |n| n.kind.as_str());
+            let reason = r.error.as_deref().unwrap_or("did not produce output");
+            format!("{id} {kind}: {}", reason.lines().next().unwrap_or(reason))
+        }
+        None => format!("output node {output_id} produced no stream"),
+    }
+}
+
+// --- preview panel keys (M13) --------------------------------------------
+
+/// Keys handled when the preview pane holds focus: `[`/`]` switch tab, `a`
+/// toggles auto-refresh, and j/k/g/G scroll the body.
+fn on_key_preview(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('[') => {
+            app.preview.tab = app.preview.tab.prev();
+            app.preview.scroll = 0;
+        }
+        KeyCode::Char(']') => {
+            app.preview.tab = app.preview.tab.next();
+            app.preview.scroll = 0;
+        }
+        KeyCode::Char('a') => {
+            app.preview.auto_refresh = !app.preview.auto_refresh;
+            app.status = if app.preview.auto_refresh {
+                "preview auto-refresh: on".to_string()
+            } else {
+                "preview auto-refresh: off (frozen)".to_string()
+            };
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.preview.scroll = app.preview.scroll.saturating_add(1);
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.preview.scroll = app.preview.scroll.saturating_sub(1);
+        }
+        KeyCode::Char('g') | KeyCode::Home => app.preview.scroll = 0,
+        // The view clamps an over-large offset to the last page.
+        KeyCode::Char('G') | KeyCode::End => app.preview.scroll = u16::MAX,
+        _ => {}
+    }
 }
 
 // --- param-edit overlay --------------------------------------------------
@@ -576,6 +707,10 @@ fn do_confirm_prompt(app: &mut App) {
                 app.dirty = false;
                 app.selected = app.pipe.topo_order().ok().and_then(|o| o.first().copied());
                 app.statuses.clear();
+                // Drop the previous pipe's preview; the run below rebuilds it.
+                app.preview.snapshot = None;
+                app.preview.error = None;
+                app.preview.scroll = 0;
                 app.mode = Mode::Normal;
                 app.status = "loaded".to_string();
                 // A different graph entirely: drop the old memo cache, then
@@ -796,7 +931,7 @@ fn kind_for_letter(ch: char) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{EditParamsState, FieldEditor, Mode, Pane};
+    use crate::app::{EditParamsState, FieldEditor, Mode, Pane, PreviewTab};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ripe_core::engine::{NodeReport, NodeStatus};
     use ripe_core::params::{FieldKind, FieldSpec, ParamSchema};
@@ -1886,6 +2021,7 @@ mod tests {
                 generation: 1,
                 report: ok_report(&[a, b, c]),
                 error: None,
+                preview: None,
             },
         );
         assert!(
@@ -1902,6 +2038,7 @@ mod tests {
                 generation: 2,
                 report: ok_report(&[a, b, c]),
                 error: None,
+                preview: None,
             },
         );
         assert_eq!(app.statuses.len(), 3);
@@ -1931,6 +2068,7 @@ mod tests {
                 generation: 1,
                 report,
                 error: None,
+                preview: None,
             },
         );
         assert!(app.statuses.contains_key(&a));
@@ -1952,6 +2090,7 @@ mod tests {
                 generation: 1,
                 report: EvalReport::default(),
                 error: Some("pipe contains a cycle (through node #2)".to_string()),
+                preview: None,
             },
         );
         assert!(!app.eval.running);
@@ -1994,5 +2133,273 @@ mod tests {
             "load schedules a run"
         );
         std::fs::remove_file(&tmp).ok();
+    }
+
+    // --- M13 preview-panel tests -----------------------------------------
+
+    /// A preview snapshot with `count` synthetic items, built off a pinned
+    /// clock so age formatting is deterministic.
+    fn sample_preview(count: usize) -> Preview {
+        let now = ripe_core::expr::parse_date("2026-07-05T12:00:00+00:00").unwrap();
+        let items: Vec<ripe_core::Item> = (0..count)
+            .map(|i| {
+                ripe_core::Item(
+                    serde_json::json!({
+                        "title": format!("Item {i}"),
+                        "link": "https://example.com/x",
+                        "description": "hello world",
+                        "pubDate": "2026-07-05T10:00:00+00:00",
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                )
+            })
+            .collect();
+        Preview::build(&items, ripe_core::Format::Rss, "Temp RSS", now)
+    }
+
+    /// Seed `app` with a fresh preview snapshot of the given size via a run.
+    fn seed_preview(app: &mut App, ids: &[NodeId], count: usize) {
+        update(app, Msg::RunAll);
+        let generation = app.eval.generation;
+        update(
+            app,
+            Msg::EvalDone {
+                generation,
+                report: ok_report(ids),
+                error: None,
+                preview: Some(sample_preview(count)),
+            },
+        );
+    }
+
+    #[test]
+    fn bracket_keys_cycle_the_preview_tab_and_reset_scroll() {
+        let (mut app, _) = canvas_app();
+        app.focus = Pane::Preview;
+        app.preview.scroll = 5;
+        assert_eq!(app.preview.tab, PreviewTab::Items);
+
+        update(&mut app, key_msg(KeyCode::Char(']')));
+        assert_eq!(app.preview.tab, PreviewTab::Raw);
+        assert_eq!(app.preview.scroll, 0, "switching tab resets scroll");
+
+        update(&mut app, key_msg(KeyCode::Char(']')));
+        assert_eq!(app.preview.tab, PreviewTab::Feed);
+        update(&mut app, key_msg(KeyCode::Char('[')));
+        assert_eq!(app.preview.tab, PreviewTab::Raw, "[ walks back");
+    }
+
+    #[test]
+    fn preview_keys_are_inert_outside_preview_focus() {
+        let (mut app, _) = canvas_app();
+        app.focus = Pane::Canvas;
+        let before = app.preview.tab;
+        update(&mut app, key_msg(KeyCode::Char(']')));
+        assert_eq!(
+            app.preview.tab, before,
+            "] must not switch tab from the canvas"
+        );
+    }
+
+    #[test]
+    fn a_toggles_auto_refresh_when_preview_focused() {
+        let (mut app, _) = canvas_app();
+        app.focus = Pane::Preview;
+        assert!(app.preview.auto_refresh);
+        update(&mut app, key_msg(KeyCode::Char('a')));
+        assert!(!app.preview.auto_refresh);
+        update(&mut app, key_msg(KeyCode::Char('a')));
+        assert!(app.preview.auto_refresh);
+    }
+
+    #[test]
+    fn j_k_scroll_the_preview_body_when_focused() {
+        let (mut app, _) = canvas_app();
+        app.focus = Pane::Preview;
+        update(&mut app, key_msg(KeyCode::Char('j')));
+        update(&mut app, key_msg(KeyCode::Char('j')));
+        assert_eq!(app.preview.scroll, 2);
+        update(&mut app, key_msg(KeyCode::Char('k')));
+        assert_eq!(app.preview.scroll, 1);
+        update(&mut app, key_msg(KeyCode::Char('g')));
+        assert_eq!(app.preview.scroll, 0, "g jumps to top");
+    }
+
+    #[test]
+    fn eval_done_populates_the_preview_when_auto_refresh_on() {
+        let (mut app, [a, b, c]) = canvas_app();
+        seed_preview(&mut app, &[a, b, c], 3);
+        let snap = app.preview.snapshot.as_ref().expect("snapshot set");
+        assert_eq!(snap.count, 3);
+        assert!(app.preview.error.is_none());
+    }
+
+    #[test]
+    fn auto_refresh_off_freezes_preview_but_statuses_still_update() {
+        let (mut app, [a, b, c]) = canvas_app();
+        seed_preview(&mut app, &[a, b, c], 3);
+        assert_eq!(app.preview.snapshot.as_ref().unwrap().count, 3);
+
+        // Freeze the panel.
+        app.focus = Pane::Preview;
+        update(&mut app, key_msg(KeyCode::Char('a')));
+        assert!(!app.preview.auto_refresh);
+
+        // A fresh run with a different stream and statuses.
+        app.statuses.clear();
+        update(&mut app, Msg::RunAll);
+        let generation = app.eval.generation;
+        update(
+            &mut app,
+            Msg::EvalDone {
+                generation,
+                report: ok_report(&[a, b, c]),
+                error: None,
+                preview: Some(sample_preview(9)),
+            },
+        );
+        assert_eq!(
+            app.preview.snapshot.as_ref().unwrap().count,
+            3,
+            "preview stays frozen while auto-refresh is off"
+        );
+        assert_eq!(app.statuses.len(), 3, "canvas statuses keep updating");
+    }
+
+    #[test]
+    fn eval_error_shows_in_preview_instead_of_stale_output() {
+        let (mut app, [a, b, c]) = canvas_app();
+        seed_preview(&mut app, &[a, b, c], 3);
+        assert!(app.preview.snapshot.is_some());
+
+        update(&mut app, Msg::RunAll);
+        let generation = app.eval.generation;
+        update(
+            &mut app,
+            Msg::EvalDone {
+                generation,
+                report: EvalReport::default(),
+                error: Some("pipe contains a cycle (through node #2)".to_string()),
+                preview: None,
+            },
+        );
+        assert!(
+            app.preview.snapshot.is_none(),
+            "stale output dropped on error"
+        );
+        assert!(
+            app.preview.error.as_deref().unwrap().contains("cycle"),
+            "preview shows the failure: {:?}",
+            app.preview.error
+        );
+    }
+
+    #[test]
+    fn preview_reports_a_missing_output_node() {
+        let mut pipe = Pipe::new("noout");
+        let a = pipe.add_node("fetch_feed", Params::new().with("url", "https://x"));
+        let b = pipe.add_node("filter", Params::new());
+        pipe.connect(a, "out", b, "in");
+        let mut app = App::with_pipe(Registry::with_builtins(), pipe, "n.pipe".into());
+
+        update(&mut app, Msg::RunAll);
+        let generation = app.eval.generation;
+        update(
+            &mut app,
+            Msg::EvalDone {
+                generation,
+                report: ok_report(&[a, b]),
+                error: None,
+                preview: None,
+            },
+        );
+        assert!(app.preview.snapshot.is_none());
+        assert!(
+            app.preview
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("Output node"),
+            "empty-state message: {:?}",
+            app.preview.error
+        );
+    }
+
+    #[test]
+    fn preview_error_names_the_failing_node() {
+        let (mut app, [a, b, c]) = canvas_app(); // fetch -> filter -> output
+        update(&mut app, Msg::RunAll);
+
+        let mut report = EvalReport::default();
+        report.nodes.insert(
+            a,
+            NodeReport {
+                status: NodeStatus::Err,
+                error: Some("404 Not Found".to_string()),
+                duration: std::time::Duration::ZERO,
+                item_count: None,
+            },
+        );
+        for blocked in [b, c] {
+            report.nodes.insert(
+                blocked,
+                NodeReport {
+                    status: NodeStatus::Unready,
+                    error: Some("upstream did not produce output".to_string()),
+                    duration: std::time::Duration::ZERO,
+                    item_count: None,
+                },
+            );
+        }
+        let generation = app.eval.generation;
+        update(
+            &mut app,
+            Msg::EvalDone {
+                generation,
+                report,
+                error: None,
+                preview: None,
+            },
+        );
+        let err = app.preview.error.as_deref().unwrap();
+        assert!(err.contains("fetch_feed"), "names the failing node: {err}");
+        assert!(err.contains("404"), "includes its message: {err}");
+        assert!(app.preview.snapshot.is_none());
+    }
+
+    #[test]
+    fn a_stale_generation_does_not_touch_the_preview() {
+        let (mut app, [a, b, c]) = canvas_app();
+        // Establish a gen-1 snapshot.
+        update(&mut app, Msg::RunAll); // gen 1
+        update(
+            &mut app,
+            Msg::EvalDone {
+                generation: 1,
+                report: ok_report(&[a, b, c]),
+                error: None,
+                preview: Some(sample_preview(3)),
+            },
+        );
+        assert_eq!(app.preview.snapshot.as_ref().unwrap().count, 3);
+
+        // Supersede, then let the stale gen-1 result arrive late.
+        update(&mut app, Msg::RunAll); // gen 2
+        update(
+            &mut app,
+            Msg::EvalDone {
+                generation: 1,
+                report: ok_report(&[a, b, c]),
+                error: None,
+                preview: Some(sample_preview(99)),
+            },
+        );
+        assert_eq!(
+            app.preview.snapshot.as_ref().unwrap().count,
+            3,
+            "a superseded generation's preview is dropped"
+        );
     }
 }

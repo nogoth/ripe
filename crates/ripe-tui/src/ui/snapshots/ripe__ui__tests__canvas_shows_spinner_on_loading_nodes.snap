@@ -1,14 +1,14 @@
 ---
 source: crates/ripe-tui/src/ui/mod.rs
-assertion_line: 397
+assertion_line: 400
 expression: "render_to_string(&mut app, 120, 40)"
 ---
  PIPES   EDIT  RUN  VIEW  HELP                               news_pipeline.pipe                               ● 8 nodes
 ┌Palette─────────────┐┏Canvas━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┌Preview────────────────────────┐
-│NODES               │┃╔════════════════════════════╗   ╭────────────────────────────╮┃│ FEED    ITEMS    RAW          │
+│NODES               │┃╔════════════════════════════╗   ╭────────────────────────────╮┃│ FEED    ITEMS (0)    RAW      │
 │  filter           t│┃║1  Fetch Feed               ║   │5  Fetch Feed               │┃│                               │
-│  limit            l│┃║https://hnrss.org/front… ⠋ …║   │https://www.reddit.com/… ⠋ …│┃│    M13: preview lands here    │
-│  regex            r│┃╚════════════════════════════╝   ╰────────────────────────────╯┃│                               │
+│  limit            l│┃║https://hnrss.org/front… ⠋ …║   │https://www.reddit.com/… ⠋ …│┃│No preview yet — press r to run│
+│  regex            r│┃╚════════════════════════════╝   ╰────────────────────────────╯┃│           the pipe.           │
 │  reverse          e│┃               ▼                                │              ┃│                               │
 │  sort             s│┃╭────────────────────────────╮                  │              ┃│                               │
 │  tail             i│┃│2  Filter                   │                  │              ┃│                               │
@@ -40,6 +40,6 @@ expression: "render_to_string(&mut app, 120, 40)"
 │                    │┃│rss → temp://out… ✓ 44 items│                                 ┃│                               │
 │                    │┃╰────────────────────────────╯                                 ┃│                               │
 │                    │┃                                                               ┃│                               │
-│                    │┃                                                               ┃│               Auto refresh: on│
+│                    │┃                                                               ┃│ Rendered 0 i…Auto refresh: on │
 └────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────┘
  Mode: Normal                              a insert   d del   c connect   r run   j/k move   tab pane   ? help   q quit

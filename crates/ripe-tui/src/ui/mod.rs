@@ -161,6 +161,8 @@ fn status_line(frame: &mut Frame, area: Rect, app: &App) {
         "Ctrl-s apply   Esc cancel   ↑/↓ field "
     } else if app.focus == Pane::Canvas {
         "a insert   d del   c connect   r run   j/k move   tab pane   ? help   q quit "
+    } else if app.focus == Pane::Preview {
+        "[ ] tab   a auto-refresh   j/k scroll   r run   tab pane   ? help "
     } else {
         "tab switch pane   ? help   q quit "
     };
@@ -223,12 +225,13 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ripe_core::engine::{NodeReport, NodeStatus};
-    use ripe_core::{NodeId, Params, Pipe, Registry};
+    use ripe_core::{Item, NodeId, Params, Pipe, Registry};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::time::Duration;
 
-    use crate::app::{EditParamsState, FieldEditor, Mode};
+    use crate::app::{EditParamsState, FieldEditor, Mode, PreviewTab};
+    use ripe_core::preview::Preview;
 
     /// A small but branch-free pipe: fetch_feed -> filter -> output.
     fn sample_pipe() -> Pipe {
@@ -457,5 +460,99 @@ mod tests {
         app.mode = Mode::EditParams(filter_id);
 
         insta::assert_snapshot!(render_to_string(&mut app, 120, 40));
+    }
+
+    // --- M13 preview snapshot tests --------------------------------------
+
+    /// A mockup-flavoured preview snapshot built off a pinned clock so ages
+    /// (and the footer time) are deterministic.
+    fn mockup_preview() -> Preview {
+        let now = ripe_core::expr::parse_date("2026-07-05T12:00:00+00:00").unwrap();
+        let mk = |title: &str, link: &str, desc: &str, pubdate: &str| {
+            Item(
+                serde_json::json!({
+                    "title": title,
+                    "link": link,
+                    "description": desc,
+                    "pubDate": pubdate,
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            )
+        };
+        let items = vec![
+            mk(
+                "Introducing Rust 1.78",
+                "https://blog.rust-lang.org/2026/rust-1-78.html",
+                "Rust 1.78.0 is now available! This release includes performance improvements across the board.",
+                "2026-07-05T10:00:00+00:00",
+            ),
+            mk(
+                "Ask HN: What's a technology that didn't live up to the hype?",
+                "https://news.ycombinator.com/item?id=42",
+                "I'm looking for examples of technologies that had a lot of promise but never really delivered.",
+                "2026-07-05T09:00:00+00:00",
+            ),
+            mk(
+                "The problem with async in Rust",
+                "https://smallcultfollowing.com/babysteps/async",
+                "Async Rust is powerful but it comes with complexity that isn't always worth the trouble.",
+                "2026-07-05T07:00:00+00:00",
+            ),
+        ];
+        Preview::build(&items, ripe_core::Format::Rss, "Temp RSS", now)
+    }
+
+    fn preview_app(tab: PreviewTab) -> App {
+        let mut app = App::with_pipe(
+            Registry::with_builtins(),
+            mockup_pipe(),
+            PathBuf::from("news_pipeline.pipe"),
+        );
+        app.focus = Pane::Preview;
+        app.preview.tab = tab;
+        app.preview.snapshot = Some(mockup_preview());
+        app
+    }
+
+    #[test]
+    fn preview_items_tab() {
+        let mut app = preview_app(PreviewTab::Items);
+        insta::assert_snapshot!(render_to_string(&mut app, 160, 40));
+    }
+
+    #[test]
+    fn preview_feed_tab() {
+        let mut app = preview_app(PreviewTab::Feed);
+        insta::assert_snapshot!(render_to_string(&mut app, 160, 40));
+    }
+
+    #[test]
+    fn preview_raw_tab() {
+        let mut app = preview_app(PreviewTab::Raw);
+        insta::assert_snapshot!(render_to_string(&mut app, 160, 40));
+    }
+
+    /// Auto-refresh off + a fetch failure: the panel names the failing node
+    /// instead of showing stale output, and the footer reads "off".
+    #[test]
+    fn preview_error_state() {
+        let mut app = preview_app(PreviewTab::Items);
+        app.preview.snapshot = None;
+        app.preview.error =
+            Some("#1 fetch_feed: 404 Not Found (https://hnrss.org/frontpage)".to_string());
+        app.preview.auto_refresh = false;
+        insta::assert_snapshot!(render_to_string(&mut app, 160, 40));
+    }
+
+    /// A run in flight with no prior snapshot: the footer shows the spinner.
+    #[test]
+    fn preview_running_shows_spinner_footer() {
+        let mut app = preview_app(PreviewTab::Items);
+        app.preview.snapshot = None;
+        app.eval.running = true;
+        app.tick_count = 1; // pin the spinner frame
+        insta::assert_snapshot!(render_to_string(&mut app, 160, 40));
     }
 }
