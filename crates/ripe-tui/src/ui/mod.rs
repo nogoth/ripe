@@ -9,6 +9,7 @@
 mod canvas;
 pub(crate) mod layout;
 pub(crate) mod palette;
+mod params;
 mod preview;
 
 use ratatui::Frame;
@@ -59,6 +60,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     if app.show_help {
         help_overlay(frame, area);
+    }
+
+    // The param-edit overlay is drawn last so it sits on top of everything.
+    if matches!(app.mode, Mode::EditParams(_)) {
+        params::render(frame, area, app);
     }
 }
 
@@ -137,6 +143,7 @@ fn status_line(frame: &mut Frame, area: Rect, app: &App) {
         Mode::InsertPending => ("Insert", Color::Yellow),
         Mode::Connecting { .. } => ("Connect", Color::Cyan),
         Mode::QuitGuard => ("Quit?", Color::Red),
+        Mode::EditParams(_) => ("Params", Color::Magenta),
         Mode::PromptPath { .. } => unreachable!(),
     };
 
@@ -150,7 +157,9 @@ fn status_line(frame: &mut Frame, area: Rect, app: &App) {
         Span::raw(app.status.clone()),
     ]);
 
-    let keys = if app.focus == Pane::Canvas {
+    let keys = if matches!(app.mode, Mode::EditParams(_)) {
+        "Ctrl-s apply   Esc cancel   ↑/↓ field "
+    } else if app.focus == Pane::Canvas {
         "a insert   d del   c connect   j/k move   tab switch pane   ? help   q quit "
     } else {
         "tab switch pane   ? help   q quit "
@@ -196,7 +205,7 @@ fn too_small(frame: &mut Frame, area: Rect) {
 }
 
 /// A `width` x `height` rectangle centered within `area`, clamped to fit.
-fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+pub(crate) fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let width = width.min(area.width);
     let height = height.min(area.height);
     Rect {
@@ -218,6 +227,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::time::Duration;
+
+    use crate::app::{EditParamsState, FieldEditor, Mode};
 
     /// A small but branch-free pipe: fetch_feed -> filter -> output.
     fn sample_pipe() -> Pipe {
@@ -382,6 +393,45 @@ mod tests {
         let mut app = App::with_pipe(Registry::with_builtins(), pipe, PathBuf::from("tall.pipe"));
         app.focus = Pane::Canvas;
         app.selected = Some(output);
+        insta::assert_snapshot!(render_to_string(&mut app, 120, 40));
+    }
+
+    // --- M11 snapshot test -----------------------------------------------
+
+    /// The param-edit overlay open on a filter node with one valid rule and
+    /// one invalid rule. The invalid rule error must be visible in the snapshot.
+    ///
+    /// State is constructed directly (not via key events) so the snapshot is
+    /// deterministic regardless of tui-textarea cursor-blink state.
+    #[test]
+    fn params_overlay_open_with_inline_error() {
+        let mut pipe = Pipe::new("snap");
+        let filter_id = pipe.add_node(
+            "filter",
+            Params::new().with("rules", serde_json::json!(["score > 100"])),
+        );
+        let mut app = App::with_pipe(Registry::with_builtins(), pipe, PathBuf::from("snap.pipe"));
+        app.focus = Pane::Canvas;
+        app.selected = Some(filter_id);
+
+        // Build the overlay state manually so the textarea content is stable.
+        let registry = Registry::with_builtins();
+        let mut state =
+            EditParamsState::open(filter_id, &registry, &app.pipe).expect("state must be created");
+
+        // Replace the rules RuleList textarea with two lines: valid + invalid.
+        if let Some(FieldEditor::RuleList(ta)) = state.editors.first_mut() {
+            *ta = tui_textarea::TextArea::new(vec![
+                "score > 100".to_string(),
+                "score >> 1".to_string(),
+            ]);
+        }
+        // Inject the inline error that a failed apply would have produced.
+        state.field_errors[0] = Some("line 2: unknown operator `>>`".to_string());
+
+        app.edit_state = Some(state);
+        app.mode = Mode::EditParams(filter_id);
+
         insta::assert_snapshot!(render_to_string(&mut app, 120, 40));
     }
 }

@@ -1,16 +1,16 @@
 //! The state transition: `update(&mut App, Msg)`. Pure and synchronous —
 //! it only mutates the model. Async work (eval) is dispatched here starting
 //! in M12; M10 adds all the editing interactions that make ripe actually
-//! usable from the keyboard.
+//! usable from the keyboard. M11 adds the param-edit overlay.
 
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use ripe_core::Params;
+use ripe_core::params::{FieldKind, Params};
 use ripe_core::persist::{load_pipe, save_pipe};
 
-use crate::app::{App, Mode, Pane, PathAction};
+use crate::app::{App, EditParamsState, FieldEditor, Mode, Pane, PathAction};
 use crate::event::Msg;
 use crate::ui::palette::insert_letter;
 
@@ -19,13 +19,20 @@ use crate::ui::palette::insert_letter;
 /// returning `update` always leaves the model in a self-consistent state.
 pub fn update(app: &mut App, msg: Msg) {
     match msg {
-        Msg::NextPane => app.focus = app.focus.next(),
+        Msg::NextPane => on_next_pane(app),
         Msg::ToggleHelp => app.show_help = !app.show_help,
         Msg::Dismiss => on_dismiss(app),
         Msg::Quit => on_quit(app),
         Msg::Tick => {}
 
-        Msg::Save => on_save(app),
+        // In EditParams mode Ctrl-S applies params rather than saving the file.
+        Msg::Save => {
+            if matches!(app.mode, Mode::EditParams(_)) {
+                do_apply_params(app);
+            } else {
+                on_save(app);
+            }
+        }
         Msg::Open => on_open(app),
 
         // These are emitted by on_key routing but handled here so the match
@@ -58,6 +65,17 @@ pub fn update(app: &mut App, msg: Msg) {
         Msg::PromptConfirm => do_confirm_prompt(app),
 
         Msg::Key(key) => on_key(app, key),
+    }
+}
+
+// --- pane cycle (Tab) ----------------------------------------------------
+
+/// Tab cycles panes in Normal modes; in EditParams it moves field focus.
+fn on_next_pane(app: &mut App) {
+    if matches!(app.mode, Mode::EditParams(_)) {
+        shift_field_focus(app, true);
+    } else {
+        app.focus = app.focus.next();
     }
 }
 
@@ -105,6 +123,7 @@ fn on_key(app: &mut App, key: KeyEvent) {
                 app.should_quit = true;
             }
         }
+        Mode::EditParams(_) => on_key_edit_params(app, key),
         Mode::Normal => {
             if app.focus != Pane::Canvas {
                 return;
@@ -122,6 +141,11 @@ fn on_key(app: &mut App, key: KeyEvent) {
                     update(app, Msg::SelectBadge(ch as u64 - '0' as u64))
                 }
                 KeyCode::Char('q') => on_quit(app),
+                KeyCode::Enter => {
+                    if app.selected.is_some() {
+                        open_params_overlay(app);
+                    }
+                }
                 _ => {}
             }
         }
@@ -131,6 +155,10 @@ fn on_key(app: &mut App, key: KeyEvent) {
 fn on_dismiss(app: &mut App) {
     match &app.mode {
         Mode::Normal => app.show_help = false,
+        Mode::EditParams(_) => {
+            app.edit_state = None;
+            app.mode = Mode::Normal;
+        }
         _ => {
             app.mode = Mode::Normal;
             app.status.clear();
@@ -145,6 +173,258 @@ fn on_quit(app: &mut App) {
         app.status = "unsaved changes — q again to quit, Esc to stay".to_string();
     } else {
         app.should_quit = true;
+    }
+}
+
+// --- param-edit overlay --------------------------------------------------
+
+/// Open the param-edit overlay for the currently-selected node.
+fn open_params_overlay(app: &mut App) {
+    let Some(node_id) = app.selected else { return };
+    let state = EditParamsState::open(node_id, &app.registry, &app.pipe);
+    app.edit_state = state;
+    app.mode = Mode::EditParams(node_id);
+    app.status.clear();
+}
+
+/// Move field focus by `delta` steps (wrapping), if the overlay is open.
+fn shift_field_focus(app: &mut App, forward: bool) {
+    let Some(state) = &mut app.edit_state else {
+        return;
+    };
+    let n = state.editors.len();
+    if n == 0 {
+        return;
+    }
+    if forward {
+        state.focused = (state.focused + 1) % n;
+    } else {
+        state.focused = (state.focused + n - 1) % n;
+    }
+}
+
+/// Key handler for `Mode::EditParams`. Up/Down/Tab/Shift-Tab move field
+/// focus; other keys are routed to the focused field's editor widget.
+fn on_key_edit_params(app: &mut App, key: KeyEvent) {
+    // Any key closes a no-field overlay.
+    let has_fields = app
+        .edit_state
+        .as_ref()
+        .is_some_and(|s| !s.editors.is_empty());
+    if !has_fields {
+        app.edit_state = None;
+        app.mode = Mode::Normal;
+        return;
+    }
+
+    match key.code {
+        KeyCode::Down | KeyCode::Tab => shift_field_focus(app, true),
+        KeyCode::Up | KeyCode::BackTab => shift_field_focus(app, false),
+        _ => {
+            let Some(state) = &mut app.edit_state else {
+                return;
+            };
+            let focused = state.focused;
+            let Some(editor) = state.editors.get_mut(focused) else {
+                return;
+            };
+            match editor {
+                FieldEditor::Text(ta) | FieldEditor::RuleList(ta) => {
+                    let _ = ta.input(tui_textarea::Input::from(key));
+                }
+                FieldEditor::Bool(b) => {
+                    if key.code == KeyCode::Char(' ') {
+                        *b = !*b;
+                    }
+                }
+                FieldEditor::Enum { variants, idx } => match key.code {
+                    KeyCode::Char(' ') | KeyCode::Right => {
+                        if !variants.is_empty() {
+                            *idx = (*idx + 1) % variants.len();
+                        }
+                    }
+                    KeyCode::Left => {
+                        if !variants.is_empty() {
+                            let n = variants.len();
+                            *idx = (*idx + n - 1) % n;
+                        }
+                    }
+                    _ => {}
+                },
+            }
+        }
+    }
+}
+
+/// Apply params from the overlay: validate per-field, then validate the pipe
+/// transactionally (clone → mutate → validate → commit only if clean).
+fn do_apply_params(app: &mut App) {
+    let Mode::EditParams(node_id) = app.mode else {
+        return;
+    };
+
+    // Collect schema and raw values without holding a borrow while we mutate.
+    let (schema, raw_values) = {
+        let Some(state) = &app.edit_state else { return };
+        let schema = state.schema.clone();
+        let raw_values: Vec<RawEditorValue> = state
+            .editors
+            .iter()
+            .map(RawEditorValue::from_editor)
+            .collect();
+        (schema, raw_values)
+    };
+
+    let mut new_params = Params::new();
+    let mut field_errors: Vec<Option<String>> = vec![None; raw_values.len()];
+    let mut has_field_errors = false;
+
+    for (i, (field, raw)) in schema.fields.iter().zip(raw_values.iter()).enumerate() {
+        match (&field.kind, raw) {
+            (FieldKind::Text | FieldKind::FieldName, RawEditorValue::Text(s)) => {
+                if field.required && s.is_empty() {
+                    field_errors[i] = Some(format!("`{}` is required", field.name));
+                    has_field_errors = true;
+                } else if !s.is_empty() {
+                    new_params.set(field.name, s.clone());
+                }
+            }
+            (FieldKind::Url, RawEditorValue::Text(s)) => {
+                if field.required && s.is_empty() {
+                    field_errors[i] = Some(format!("`{}` is required", field.name));
+                    has_field_errors = true;
+                } else if !s.is_empty() {
+                    // URL must contain "://" or be a ${param} reference.
+                    if !s.contains("://") && !s.contains("${") {
+                        field_errors[i] =
+                            Some("URL must contain '://' (or use ${param})".to_string());
+                        has_field_errors = true;
+                    }
+                    new_params.set(field.name, s.clone());
+                }
+            }
+            (FieldKind::Number, RawEditorValue::Text(s)) => {
+                if s.is_empty() {
+                    if field.required && field.default.is_none() {
+                        field_errors[i] = Some(format!("`{}` is required", field.name));
+                        has_field_errors = true;
+                    }
+                    // empty optional number → omit so schema default applies
+                } else if s.starts_with("${") {
+                    // ${param} reference — store as string; engine interpolates.
+                    new_params.set(field.name, s.clone());
+                } else {
+                    match s.parse::<f64>() {
+                        Ok(n) => {
+                            new_params.set(
+                                field.name,
+                                serde_json::Number::from_f64(n)
+                                    .map(serde_json::Value::Number)
+                                    .unwrap_or(serde_json::Value::Null),
+                            );
+                        }
+                        Err(_) => {
+                            field_errors[i] = Some(format!("`{s}` is not a valid number"));
+                            has_field_errors = true;
+                        }
+                    }
+                }
+            }
+            (FieldKind::Bool, RawEditorValue::Bool(b)) => {
+                new_params.set(field.name, *b);
+            }
+            (FieldKind::Enum(_), RawEditorValue::EnumIdx(idx)) => {
+                // Look up the current variant name from the editor.
+                let Some(state) = &app.edit_state else {
+                    continue;
+                };
+                if let Some(FieldEditor::Enum { variants, .. }) = state.editors.get(i)
+                    && let Some(&v) = variants.get(*idx)
+                {
+                    new_params.set(field.name, v);
+                }
+            }
+            (FieldKind::RuleList, RawEditorValue::Lines(lines)) => {
+                // Validate each non-blank line.
+                let mut rule_errors: Vec<String> = Vec::new();
+                for (line_idx, line) in lines.iter().enumerate() {
+                    if field.name == "rules"
+                        && let Err(e) = ripe_core::expr::compile(line)
+                    {
+                        rule_errors.push(format!("line {}: {e}", line_idx + 1));
+                    }
+                    // "ops" (transform) and others: accept any non-empty line.
+                }
+                if !rule_errors.is_empty() {
+                    field_errors[i] = Some(rule_errors.join("; "));
+                    has_field_errors = true;
+                }
+                if !lines.is_empty() {
+                    let arr: Vec<serde_json::Value> = lines
+                        .iter()
+                        .map(|l| serde_json::Value::String(l.clone()))
+                        .collect();
+                    new_params.set(field.name, serde_json::Value::Array(arr));
+                }
+            }
+            _ => {} // mismatched kind/raw — shouldn't happen; skip silently
+        }
+    }
+
+    if has_field_errors {
+        let state = app.edit_state.as_mut().unwrap();
+        state.field_errors = field_errors;
+        state.form_error = None;
+        return;
+    }
+
+    // Transactional pipe validation: clone → mutate → validate → commit.
+    let mut candidate = app.pipe.clone();
+    if let Some(node) = candidate.node_mut(node_id) {
+        node.params = new_params;
+    }
+    let errors = candidate.validate(&app.registry);
+    if errors.is_empty() {
+        app.pipe = candidate;
+        app.dirty = true;
+        app.edit_state = None;
+        app.mode = Mode::Normal;
+        app.status = format!("params saved for {node_id}");
+    } else {
+        let state = app.edit_state.as_mut().unwrap();
+        state.field_errors = field_errors;
+        state.form_error = Some(errors[0].clone());
+    }
+}
+
+/// A simple, lifetime-free snapshot of a `FieldEditor`'s current value,
+/// extracted without holding a borrow on `edit_state`.
+enum RawEditorValue {
+    Text(String),
+    Bool(bool),
+    EnumIdx(usize),
+    Lines(Vec<String>),
+}
+
+impl RawEditorValue {
+    fn from_editor(editor: &FieldEditor) -> Self {
+        match editor {
+            FieldEditor::Text(ta) => {
+                let first = ta.lines().first().cloned().unwrap_or_default();
+                RawEditorValue::Text(first.trim().to_string())
+            }
+            FieldEditor::Bool(b) => RawEditorValue::Bool(*b),
+            FieldEditor::Enum { idx, .. } => RawEditorValue::EnumIdx(*idx),
+            FieldEditor::RuleList(ta) => {
+                let lines: Vec<String> = ta
+                    .lines()
+                    .iter()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                RawEditorValue::Lines(lines)
+            }
+        }
     }
 }
 
@@ -417,8 +697,9 @@ fn kind_for_letter(ch: char) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{Mode, Pane};
+    use crate::app::{EditParamsState, FieldEditor, Mode, Pane};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ripe_core::params::{FieldKind, FieldSpec, ParamSchema};
     use ripe_core::{NodeId, Params, Pipe, Registry};
 
     fn app() -> App {
@@ -831,6 +1112,314 @@ mod tests {
         assert!(app.should_quit);
     }
 
+    // --- M11 param overlay tests -----------------------------------------
+
+    #[test]
+    fn enter_on_canvas_opens_param_overlay_for_selected_node() {
+        let (mut app, [_a, b, _c]) = canvas_app();
+        app.selected = Some(b); // b is a filter node
+        update(&mut app, key_msg(KeyCode::Enter));
+        assert!(
+            matches!(app.mode, Mode::EditParams(id) if id == b),
+            "mode should be EditParams(b), got {:?}",
+            app.mode
+        );
+        assert!(app.edit_state.is_some(), "edit_state must be populated");
+    }
+
+    #[test]
+    fn enter_without_selection_does_not_open_overlay() {
+        let mut app = app();
+        app.focus = Pane::Canvas;
+        app.selected = None;
+        update(&mut app, key_msg(KeyCode::Enter));
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.edit_state.is_none());
+    }
+
+    #[test]
+    fn esc_from_overlay_discards_edits_and_returns_to_normal() {
+        let (mut app, [_a, b, _c]) = canvas_app();
+        app.selected = Some(b);
+        // Open overlay.
+        update(&mut app, key_msg(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::EditParams(_)));
+        // Type something (goes into rules field TextArea).
+        update(&mut app, key_msg(KeyCode::Char('x')));
+        // Esc discards.
+        update(&mut app, Msg::Dismiss);
+        assert_eq!(app.mode, Mode::Normal);
+        assert!(app.edit_state.is_none());
+        // Params are unchanged.
+        assert_eq!(app.pipe.node(b).unwrap().params.get("rules"), None);
+        assert!(!app.dirty, "Esc must not mark dirty");
+    }
+
+    #[test]
+    fn ctrl_s_in_overlay_applies_rules_sets_params_and_dirty() {
+        let (mut app, [_a, b, _c]) = canvas_app();
+        app.selected = Some(b); // filter node; field 0 is "rules" (RuleList)
+        update(&mut app, key_msg(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::EditParams(_)));
+
+        // Type "score > 100" into the focused rules TextArea.
+        for ch in "score > 100".chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+
+        // Apply with Ctrl-s.
+        update(&mut app, Msg::Save);
+        assert_eq!(
+            app.mode,
+            Mode::Normal,
+            "overlay should close on successful apply"
+        );
+        assert!(app.edit_state.is_none());
+        assert!(app.dirty);
+
+        let rules = app.pipe.node(b).unwrap().params.get("rules").unwrap();
+        let arr = rules.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0].as_str().unwrap(), "score > 100");
+    }
+
+    #[test]
+    fn bad_rule_blocks_apply_and_shows_inline_error() {
+        let (mut app, [_a, b, _c]) = canvas_app();
+        app.selected = Some(b);
+        update(&mut app, key_msg(KeyCode::Enter));
+
+        // Type an invalid rule.
+        for ch in "score >> 1".chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+
+        update(&mut app, Msg::Save);
+
+        // Overlay must remain open.
+        assert!(
+            matches!(app.mode, Mode::EditParams(_)),
+            "overlay must stay open after bad rule"
+        );
+        // A field error must be set.
+        let state = app.edit_state.as_ref().unwrap();
+        assert!(
+            state.field_errors.iter().any(|e| e.is_some()),
+            "field_errors must be non-empty"
+        );
+        // Pipe must be unchanged.
+        assert_eq!(app.pipe.node(b).unwrap().params.get("rules"), None);
+        assert!(!app.dirty);
+    }
+
+    #[test]
+    fn number_field_stores_valid_number_as_json_number() {
+        // Use the "limit" module which has a required Number field "n".
+        let mut pipe = Pipe::new("lim");
+        let limit_id = pipe.add_node("limit", Params::new());
+        let mut app = App::with_pipe(Registry::with_builtins(), pipe, "l.pipe".into());
+        app.focus = Pane::Canvas;
+        app.selected = Some(limit_id);
+
+        update(&mut app, key_msg(KeyCode::Enter));
+        // Type "25".
+        for ch in "25".chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+        update(&mut app, Msg::Save);
+
+        assert_eq!(app.mode, Mode::Normal);
+        let n = app.pipe.node(limit_id).unwrap().params.get("n").unwrap();
+        assert_eq!(n.as_f64(), Some(25.0));
+    }
+
+    #[test]
+    fn number_field_invalid_text_shows_inline_error() {
+        let mut pipe = Pipe::new("lim");
+        let limit_id = pipe.add_node("limit", Params::new());
+        let mut app = App::with_pipe(Registry::with_builtins(), pipe, "l.pipe".into());
+        app.focus = Pane::Canvas;
+        app.selected = Some(limit_id);
+
+        update(&mut app, key_msg(KeyCode::Enter));
+        for ch in "abc".chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+        update(&mut app, Msg::Save);
+
+        // Overlay stays open.
+        assert!(matches!(app.mode, Mode::EditParams(_)));
+        let state = app.edit_state.as_ref().unwrap();
+        assert!(state.field_errors.iter().any(|e| e.is_some()));
+        assert!(!app.dirty);
+    }
+
+    #[test]
+    fn number_field_param_ref_stored_as_string() {
+        let mut pipe = Pipe::new("lim");
+        let limit_id = pipe.add_node("limit", Params::new());
+        // Add a pipe-level param "n" so the ref is declared.
+        pipe.params.push(ripe_core::PipeParam {
+            name: "n".to_string(),
+            kind: ripe_core::PipeParamKind::Number,
+            default: None,
+        });
+        let mut app = App::with_pipe(Registry::with_builtins(), pipe, "l.pipe".into());
+        app.focus = Pane::Canvas;
+        app.selected = Some(limit_id);
+
+        update(&mut app, key_msg(KeyCode::Enter));
+        for ch in "${n}".chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+        update(&mut app, Msg::Save);
+
+        assert_eq!(
+            app.mode,
+            Mode::Normal,
+            "apply should succeed: ${{n}} is a valid declared ref"
+        );
+        let val = app.pipe.node(limit_id).unwrap().params.get("n").unwrap();
+        assert_eq!(val.as_str(), Some("${n}"), "param ref stored as string");
+    }
+
+    #[test]
+    fn bool_field_toggles_on_space() {
+        // Directly build edit state with a Bool field (no built-in has Bool,
+        // so we test the editor in isolation without going through a real node).
+        let mut app = app();
+
+        let schema = ParamSchema::new(vec![FieldSpec::optional(
+            "active",
+            "Active",
+            FieldKind::Bool,
+        )]);
+        let state = EditParamsState {
+            schema,
+            focused: 0,
+            editors: vec![FieldEditor::Bool(false)],
+            field_errors: vec![None],
+            form_error: None,
+        };
+        app.edit_state = Some(state);
+        // NodeId(99) is a sentinel — we're only testing key routing, not apply.
+        app.mode = Mode::EditParams(NodeId(99));
+
+        update(&mut app, key_msg(KeyCode::Char(' ')));
+
+        let st = app.edit_state.as_ref().unwrap();
+        assert!(
+            matches!(st.editors[0], FieldEditor::Bool(true)),
+            "Space must flip bool to true"
+        );
+
+        update(&mut app, key_msg(KeyCode::Char(' ')));
+        let st = app.edit_state.as_ref().unwrap();
+        assert!(
+            matches!(st.editors[0], FieldEditor::Bool(false)),
+            "second Space flips back to false"
+        );
+    }
+
+    #[test]
+    fn enum_field_cycles_on_space_and_left_right() {
+        let mut app = app();
+
+        let schema = ParamSchema::new(vec![FieldSpec::optional(
+            "mode",
+            "Mode",
+            FieldKind::Enum(&["permit", "block", "log"]),
+        )]);
+        let state = EditParamsState {
+            schema,
+            focused: 0,
+            editors: vec![FieldEditor::Enum {
+                variants: &["permit", "block", "log"],
+                idx: 0,
+            }],
+            field_errors: vec![None],
+            form_error: None,
+        };
+        app.edit_state = Some(state);
+        app.mode = Mode::EditParams(NodeId(99));
+
+        // Space → advance to "block"
+        update(&mut app, key_msg(KeyCode::Char(' ')));
+        let st = app.edit_state.as_ref().unwrap();
+        assert!(matches!(st.editors[0], FieldEditor::Enum { idx: 1, .. }));
+
+        // Right → advance to "log"
+        update(&mut app, key_msg(KeyCode::Right));
+        let st = app.edit_state.as_ref().unwrap();
+        assert!(matches!(st.editors[0], FieldEditor::Enum { idx: 2, .. }));
+
+        // Right wraps → back to "permit"
+        update(&mut app, key_msg(KeyCode::Right));
+        let st = app.edit_state.as_ref().unwrap();
+        assert!(matches!(st.editors[0], FieldEditor::Enum { idx: 0, .. }));
+
+        // Left wraps → "log"
+        update(&mut app, key_msg(KeyCode::Left));
+        let st = app.edit_state.as_ref().unwrap();
+        assert!(matches!(st.editors[0], FieldEditor::Enum { idx: 2, .. }));
+    }
+
+    #[test]
+    fn undeclared_param_ref_in_text_field_rejected_at_apply() {
+        // A node with a URL field (fetch_feed).
+        let mut pipe = Pipe::new("test");
+        let fetch_id = pipe.add_node("fetch_feed", Params::new());
+        let mut app = App::with_pipe(Registry::with_builtins(), pipe, "test.pipe".into());
+        app.focus = Pane::Canvas;
+        app.selected = Some(fetch_id);
+
+        update(&mut app, key_msg(KeyCode::Enter));
+        // Type "${nope}" — contains "${" so URL validation passes, but
+        // "nope" is undeclared, so pipe.validate() will catch it.
+        for ch in "${nope}".chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+        update(&mut app, Msg::Save);
+
+        // Overlay must stay open with a form error.
+        assert!(
+            matches!(app.mode, Mode::EditParams(_)),
+            "overlay must stay open when pipe validation fails"
+        );
+        let state = app.edit_state.as_ref().unwrap();
+        assert!(
+            state.form_error.is_some(),
+            "form_error must be set for undeclared ref"
+        );
+        // Pipe is unchanged.
+        assert_eq!(app.pipe.node(fetch_id).unwrap().params.get("url"), None);
+        assert!(!app.dirty);
+    }
+
+    #[test]
+    fn tab_in_overlay_moves_field_focus_not_pane() {
+        let (mut app, [_a, b, _c]) = canvas_app();
+        app.selected = Some(b); // filter: 3 fields
+        update(&mut app, key_msg(KeyCode::Enter));
+        let initial_pane = app.focus;
+
+        // Tab should move field focus, not switch pane.
+        update(&mut app, Msg::NextPane);
+        assert_eq!(app.focus, initial_pane, "pane must not change in overlay");
+        let st = app.edit_state.as_ref().unwrap();
+        assert_eq!(st.focused, 1, "field focus must advance to 1");
+
+        // Tab again.
+        update(&mut app, Msg::NextPane);
+        let st = app.edit_state.as_ref().unwrap();
+        assert_eq!(st.focused, 2, "field focus must advance to 2");
+
+        // Tab wraps.
+        update(&mut app, Msg::NextPane);
+        let st = app.edit_state.as_ref().unwrap();
+        assert_eq!(st.focused, 0, "field focus must wrap to 0");
+    }
+
     // --- M10 acceptance test (mockup pipe from keyboard) -----------------
 
     /// Build the mockup pipe entirely through update(), save, reload, and
@@ -999,5 +1588,90 @@ mod tests {
         assert_eq!(loaded.pipe.edges, app.pipe.edges);
 
         std::fs::remove_file(&tmp).ok();
+    }
+
+    // --- M11 acceptance test (overlay edits change module output) --------
+
+    #[tokio::test]
+    async fn acceptance_overlay_filter_params_change_output() {
+        use ripe_core::fetch::FetchClient;
+        use ripe_core::item::{Item, PortValue};
+        use ripe_core::module::{EvalCtx, Ins};
+
+        let registry = Registry::with_builtins();
+        let mut pipe = Pipe::new("test");
+        let filter_id = pipe.add_node("filter", Params::new());
+        let mut app = App::with_pipe(registry, pipe, "test.pipe".into());
+        app.focus = Pane::Canvas;
+        app.selected = Some(filter_id);
+
+        // Open overlay.
+        update(
+            &mut app,
+            Msg::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty())),
+        );
+        assert!(
+            matches!(app.mode, Mode::EditParams(_)),
+            "overlay should open"
+        );
+
+        // Type "score > 100" into the rules field.
+        for ch in "score > 100".chars() {
+            update(
+                &mut app,
+                Msg::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::empty())),
+            );
+        }
+
+        // Apply.
+        update(&mut app, Msg::Save);
+        assert_eq!(app.mode, Mode::Normal, "overlay closes after apply");
+        assert!(app.dirty);
+
+        // Verify params set.
+        let params = app.pipe.node(filter_id).unwrap().params.clone();
+        let rules = params.get("rules").expect("rules must be set");
+        let arr = rules.as_array().expect("rules must be array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0].as_str().unwrap(), "score > 100");
+
+        // Eval filter directly with hand-built inputs.
+        let reg = Registry::with_builtins();
+        let filter_module = reg.get("filter").unwrap();
+        let ctx = EvalCtx::new(FetchClient::default());
+
+        fn make_item(score: serde_json::Value) -> Item {
+            Item(
+                serde_json::json!({"score": score})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+        }
+
+        let mut ins = Ins::default();
+        ins.push(
+            "in",
+            PortValue::Items(vec![
+                make_item(serde_json::json!(50)),
+                make_item(serde_json::json!(150)),
+                make_item(serde_json::json!("200")),
+            ]),
+        );
+
+        let outs = filter_module.eval(&ctx, ins, &params).await.unwrap();
+        let items = match outs.get("out").unwrap() {
+            PortValue::Items(items) => items,
+            _ => panic!("expected Items on `out`"),
+        };
+
+        // Scores 150 and "200" (string-coerced to 200.0) are > 100; 50 is not.
+        assert_eq!(items.len(), 2, "exactly two items should pass score > 100");
+        let scores: Vec<f64> = items
+            .iter()
+            .filter_map(|item| item.get("score").and_then(ripe_core::expr::value_f64))
+            .collect();
+        assert!(scores.contains(&150.0));
+        assert!(scores.contains(&200.0));
     }
 }

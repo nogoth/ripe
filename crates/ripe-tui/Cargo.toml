@@ -16,12 +16,13 @@ anyhow.workspace = true
 tokio.workspace = true
 futures.workspace = true
 tracing.workspace = true
+serde_json.workspace = true
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
+tui-textarea = { version = "0.7", features = ["crossterm"] }
 
 [dev-dependencies]
 insta.workspace = true
-serde_json.workspace = true
 
 [lints]
 workspace = true

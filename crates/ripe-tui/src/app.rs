@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use ripe_core::engine::NodeReport;
+use ripe_core::params::{FieldKind, ParamSchema};
 use ripe_core::{NodeId, Pipe, Registry};
 
 use crate::ui::layout::Layout;
@@ -50,6 +51,118 @@ pub enum Mode {
     PromptPath { action: PathAction, buf: String },
     /// `q` was pressed with unsaved edits; press `q` again to confirm quit.
     QuitGuard,
+    /// The param-edit overlay is open for the given node. The widget state
+    /// lives in `App::edit_state`; keeping it separate lets `Mode` stay
+    /// `Clone + PartialEq` without threading `TextArea`'s lifetime through.
+    EditParams(NodeId),
+}
+
+// ---- param-edit overlay state -------------------------------------------
+
+/// Per-field editing widget. Text/Number/RuleList fields use tui-textarea for
+/// cursor-capable input; Bool and Enum use simple toggle/cycle state.
+pub enum FieldEditor {
+    /// Single-line input — used for Text, Url, FieldName, and Number fields.
+    Text(tui_textarea::TextArea<'static>),
+    /// Boolean toggle — Space flips the value.
+    Bool(bool),
+    /// Enum cycle — Space / Left / Right walks the variants in order.
+    Enum {
+        variants: &'static [&'static str],
+        idx: usize,
+    },
+    /// Multi-line rule list — one entry per line.
+    RuleList(tui_textarea::TextArea<'static>),
+}
+
+/// The state kept while the param-edit overlay is open.
+/// Held in `App::edit_state` rather than inlined in `Mode`.
+pub struct EditParamsState {
+    /// Schema of the node under edit.
+    pub schema: ParamSchema,
+    /// Index of the field currently focused (0-based, wraps).
+    pub focused: usize,
+    /// One editor per schema field, in schema order.
+    pub editors: Vec<FieldEditor>,
+    /// Per-field inline error from the last failed apply (`None` = clean).
+    pub field_errors: Vec<Option<String>>,
+    /// Whole-form error (e.g., pipe structural validation rejected a `${ref}`).
+    pub form_error: Option<String>,
+}
+
+impl EditParamsState {
+    /// Initialise overlay state from the node's current params. Returns `None`
+    /// if the node or its registered module cannot be found.
+    pub fn open(node_id: NodeId, registry: &Registry, pipe: &Pipe) -> Option<Self> {
+        let node = pipe.node(node_id)?;
+        let module = registry.get(&node.kind)?;
+        let schema = module.param_schema();
+        let params = &node.params;
+
+        let editors: Vec<FieldEditor> = schema
+            .fields
+            .iter()
+            .map(|field| match &field.kind {
+                FieldKind::Text | FieldKind::Url | FieldKind::FieldName | FieldKind::Number => {
+                    let content = match params.get(field.name) {
+                        Some(serde_json::Value::String(s)) => s.clone(),
+                        Some(v) => v.to_string(),
+                        None => String::new(),
+                    };
+                    let mut ta = tui_textarea::TextArea::default();
+                    if !content.is_empty() {
+                        ta.insert_str(&content);
+                    }
+                    FieldEditor::Text(ta)
+                }
+                FieldKind::Bool => {
+                    let val = params.get_bool(field.name).unwrap_or_else(|| {
+                        field
+                            .default
+                            .as_ref()
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                    });
+                    FieldEditor::Bool(val)
+                }
+                FieldKind::Enum(variants) => {
+                    let current = params
+                        .get_str(field.name)
+                        .or_else(|| field.default.as_ref().and_then(|v| v.as_str()));
+                    let idx = current
+                        .and_then(|s| variants.iter().position(|&v| v == s))
+                        .unwrap_or(0);
+                    FieldEditor::Enum { variants, idx }
+                }
+                FieldKind::RuleList => {
+                    let rules: Vec<String> = params
+                        .get(field.name)
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let ta = if rules.is_empty() {
+                        tui_textarea::TextArea::default()
+                    } else {
+                        tui_textarea::TextArea::new(rules)
+                    };
+                    FieldEditor::RuleList(ta)
+                }
+            })
+            .collect();
+
+        let n = editors.len();
+        Some(EditParamsState {
+            schema,
+            focused: 0,
+            editors,
+            field_errors: vec![None; n],
+            form_error: None,
+        })
+    }
 }
 
 /// The editor state. Owns the registry so the palette can group the real
@@ -79,6 +192,8 @@ pub struct App {
     pub mode: Mode,
     /// One-line message shown in the status area; replaced by the next action.
     pub status: String,
+    /// State for the param-edit overlay (`Some` iff `mode == EditParams`).
+    pub edit_state: Option<EditParamsState>,
 }
 
 impl App {
@@ -110,6 +225,7 @@ impl App {
             should_quit: false,
             mode: Mode::Normal,
             status: String::new(),
+            edit_state: None,
         }
     }
 

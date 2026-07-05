@@ -1,0 +1,44 @@
+---
+source: crates/ripe-tui/src/ui/mod.rs
+expression: "render_to_string(&mut app, 120, 40)"
+---
+ PIPES   EDIT  RUN  VIEW  HELP                                    snap.pipe                                   ● 1 nodes
+┌Palette─────────────┐┏Canvas━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┌Preview────────────────────────┐
+│NODES               │┃╔════════════════════════════╗                                 ┃│ FEED    ITEMS    RAW          │
+│  filter           t│┃║1  Filter                   ║                                 ┃│                               │
+│  limit            l│┃║score > 100                 ║                                 ┃│    M13: preview lands here    │
+│  regex            r│┃╚════════════════════════════╝                                 ┃│                               │
+│  reverse          e│┃ ╔ node #1 (filter) ════════════════════════════════════════════════════╗                       │
+│  sort             s│┃ ║Rules (field op value) [rules]                                        ║                       │
+│  tail             i│┃ ║  score > 100                                                         ║                       │
+│  transform        m│┃ ║  score >> 1                                                          ║                       │
+│  union            u│┃ ║                                                                      ║                       │
+│  unique           q│┃ ║  ⚠ line 2: unknown operator `>>`                                     ║                       │
+│                    │┃ ║                                                                      ║                       │
+│SOURCES             │┃ ║Mode [enum]                                                           ║                       │
+│  fetch_csv        v│┃ ║  [permit] | block                                                    ║                       │
+│  fetch_feed       f│┃ ║                                                                      ║                       │
+│  fetch_json       j│┃ ║Match [enum]                                                          ║                       │
+│                    │┃ ║  [all] | any                                                         ║                       │
+│SINKS               │┃ ║                                                                      ║                       │
+│  output           o│┃ ║                                                                      ║                       │
+│                    │┃ ║                                                                      ║                       │
+│                    │┃ ║                                                                      ║                       │
+│                    │┃ ║                                                                      ║                       │
+│                    │┃ ║                                                                      ║                       │
+│                    │┃ ║                                                                      ║                       │
+│                    │┃ ║                                                                      ║                       │
+│                    │┃ ║                                                                      ║                       │
+│                    │┃ ║                                                                      ║                       │
+│                    │┃ ║                                                                      ║                       │
+│                    │┃ ║                                                                      ║                       │
+│                    │┃ ║                                                                      ║                       │
+│                    │┃ ║                                                                      ║                       │
+│                    │┃ ║Ctrl-s apply   Esc cancel   ↑/↓ field                                 ║                       │
+│                    │┃ ╚══════════════════════════════════════════════════════════════════════╝                       │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│               Auto refresh: on│
+└────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────┘
+ Mode: Params                                                                     Ctrl-s apply   Esc cancel   ↑/↓ field
