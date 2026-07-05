@@ -49,7 +49,7 @@ pub enum NodeStatus {
 }
 
 /// Per-node outcome of one engine run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeReport {
     pub status: NodeStatus,
     pub error: Option<String>,
@@ -58,7 +58,7 @@ pub struct NodeReport {
 }
 
 /// Outcome of one engine run, keyed by node.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EvalReport {
     pub nodes: BTreeMap<NodeId, NodeReport>,
 }
@@ -92,6 +92,12 @@ impl EvalCache {
     /// The most recent output of `node`, if it has ever evaluated cleanly.
     pub fn output(&self, node: NodeId) -> Option<Arc<Outs>> {
         self.entries.get(&node).map(|e| e.outs.clone())
+    }
+
+    /// Drop every memoized output. The TUI clears the cache when it opens a
+    /// different pipe so no stale entry can be mistaken for the new graph's.
+    pub fn clear(&mut self) {
+        self.entries.clear();
     }
 }
 
@@ -136,6 +142,34 @@ impl Engine {
         cache: &mut EvalCache,
         ctx: &EvalCtx,
     ) -> Result<EvalReport, EngineError> {
+        self.eval_inner(pipe, cache, ctx, None).await
+    }
+
+    /// Evaluate only `targets` and their transitive upstreams; every other
+    /// node is skipped and left out of the report (its cached output, if any,
+    /// survives untouched). Backs the TUI's "run to selected" command. Because
+    /// ancestors are evaluated before their dependants, restricting the set
+    /// never starves a node that is itself in the set.
+    pub async fn eval_upto(
+        &self,
+        pipe: &Pipe,
+        targets: &[NodeId],
+        cache: &mut EvalCache,
+        ctx: &EvalCtx,
+    ) -> Result<EvalReport, EngineError> {
+        let only = pipe.upstream_closure(targets);
+        self.eval_inner(pipe, cache, ctx, Some(&only)).await
+    }
+
+    /// Shared body of [`Engine::eval`] and [`Engine::eval_upto`]. `only`, when
+    /// present, restricts evaluation to that node set.
+    async fn eval_inner(
+        &self,
+        pipe: &Pipe,
+        cache: &mut EvalCache,
+        ctx: &EvalCtx,
+        only: Option<&std::collections::BTreeSet<NodeId>>,
+    ) -> Result<EvalReport, EngineError> {
         let errors = pipe.validate(&self.registry);
         if !errors.is_empty() {
             return Err(EngineError::Invalid(errors));
@@ -147,7 +181,7 @@ impl Engine {
         for layer in 0..=max_layer {
             let wave: Vec<NodeId> = layers
                 .iter()
-                .filter(|&(_, l)| *l == layer)
+                .filter(|&(id, l)| *l == layer && only.is_none_or(|set| set.contains(id)))
                 .map(|(id, _)| *id)
                 .collect();
             self.eval_wave(pipe, &wave, cache, ctx, &mut report).await;
@@ -426,6 +460,39 @@ mod tests {
         assert_eq!(report.status(a), Some(&NodeStatus::Cached));
         assert_eq!(report.status(b), Some(&NodeStatus::Ok));
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn eval_upto_evaluates_only_target_and_its_ancestors() {
+        let (registry, counter) = test_registry();
+        let engine = Engine::new(Arc::new(registry));
+        let (pipe, src, a, b) = chain(); // src -> a -> b
+        let mut cache = EvalCache::new();
+
+        // "Run to a": src and a evaluate; b is skipped entirely.
+        let report = engine
+            .eval_upto(&pipe, &[a], &mut cache, &ctx())
+            .await
+            .unwrap();
+        assert_eq!(report.status(src), Some(&NodeStatus::Ok));
+        assert_eq!(report.status(a), Some(&NodeStatus::Ok));
+        assert_eq!(report.status(b), None, "b is downstream of the target");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "only `a` ran (src isn't a pass)"
+        );
+
+        // A later full run reuses the cached src/a and only adds b.
+        let report = engine.eval(&pipe, &mut cache, &ctx()).await.unwrap();
+        assert_eq!(report.status(src), Some(&NodeStatus::Cached));
+        assert_eq!(report.status(a), Some(&NodeStatus::Cached));
+        assert_eq!(report.status(b), Some(&NodeStatus::Ok));
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            2,
+            "only `b` ran on the full pass"
+        );
     }
 
     #[tokio::test]

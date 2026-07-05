@@ -1,6 +1,6 @@
 ---
 source: crates/ripe-tui/src/ui/mod.rs
-assertion_line: 386
+assertion_line: 420
 expression: "render_to_string(&mut app, 120, 40)"
 ---
  PIPES   EDIT  RUN  VIEW  HELP                                   tall.pipe                                   ● 11 nodes
@@ -42,4 +42,4 @@ expression: "render_to_string(&mut app, 120, 40)"
 │                    │┃║rss → stdout                ║                                 ┃│                               │
 │                    │┃╚════════════════════════════╝                                 ┃│               Auto refresh: on│
 └────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────┘
- Mode: Normal                               a insert   d del   c connect   j/k move   tab switch pane   ? help   q quit
+ Mode: Normal                              a insert   d del   c connect   r run   j/k move   tab pane   ? help   q quit

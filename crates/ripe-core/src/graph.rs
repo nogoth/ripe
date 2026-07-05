@@ -287,6 +287,30 @@ impl Pipe {
         }
     }
 
+    /// The transitive-upstream closure of `targets`, including the targets
+    /// themselves. Walks incoming edges breadth-first. Used by "run to
+    /// selected" to evaluate only what feeds the chosen node, and by the TUI
+    /// to know which nodes to show as loading for that run.
+    pub fn upstream_closure(&self, targets: &[NodeId]) -> std::collections::BTreeSet<NodeId> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut stack: Vec<NodeId> = targets
+            .iter()
+            .copied()
+            .filter(|id| self.node(*id).is_some())
+            .collect();
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            for edge in self.edges_into(id) {
+                if self.node(edge.from.node).is_some() {
+                    stack.push(edge.from.node);
+                }
+            }
+        }
+        seen
+    }
+
     /// Layer index per node: sources at 0, every other node one past its
     /// deepest upstream. Drives both eval waves and (later) auto-layout.
     pub fn layers(&self) -> Result<BTreeMap<NodeId, usize>, NodeId> {
@@ -337,6 +361,34 @@ mod tests {
         // An edge reorders only what it must; ties stay in id order.
         pipe.connect(c, "out", b, "in");
         assert_eq!(pipe.topo_order().unwrap(), vec![a, c, b]);
+    }
+
+    #[test]
+    fn upstream_closure_gathers_ancestors_and_self_only() {
+        // diamond:  s -> a -> m ; s -> b -> m ; m -> out
+        let mut pipe = Pipe::new("d");
+        let s = pipe.add_node("test_source", Params::new());
+        let a = pipe.add_node("test_pass", Params::new());
+        let b = pipe.add_node("test_pass", Params::new());
+        let m = pipe.add_node("test_pass", Params::new());
+        let out = pipe.add_node("test_pass", Params::new());
+        pipe.connect(s, "out", a, "in");
+        pipe.connect(s, "out", b, "in");
+        pipe.connect(a, "out", m, "in");
+        pipe.connect(b, "out", m, "in");
+        pipe.connect(m, "out", out, "in");
+
+        // m's closure is everything feeding m plus m — but not `out`.
+        let closure = pipe.upstream_closure(&[m]);
+        assert_eq!(
+            closure,
+            [s, a, b, m].into_iter().collect(),
+            "closure must include m and all its ancestors, excluding out"
+        );
+        // a's closure is just s and a.
+        assert_eq!(pipe.upstream_closure(&[a]), [s, a].into_iter().collect());
+        // An unknown target contributes nothing.
+        assert!(pipe.upstream_closure(&[NodeId(999)]).is_empty());
     }
 
     #[test]

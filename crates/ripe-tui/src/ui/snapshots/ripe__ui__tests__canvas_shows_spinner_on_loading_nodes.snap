@@ -1,13 +1,13 @@
 ---
 source: crates/ripe-tui/src/ui/mod.rs
-assertion_line: 373
+assertion_line: 397
 expression: "render_to_string(&mut app, 120, 40)"
 ---
  PIPES   EDIT  RUN  VIEW  HELP                               news_pipeline.pipe                               ● 8 nodes
 ┌Palette─────────────┐┏Canvas━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┌Preview────────────────────────┐
 │NODES               │┃╔════════════════════════════╗   ╭────────────────────────────╮┃│ FEED    ITEMS    RAW          │
 │  filter           t│┃║1  Fetch Feed               ║   │5  Fetch Feed               │┃│                               │
-│  limit            l│┃║https://hnrss.or… ✓ 44 items║   │https://www.redd… ✓ 44 items│┃│    M13: preview lands here    │
+│  limit            l│┃║https://hnrss.org/front… ⠋ …║   │https://www.reddit.com/… ⠋ …│┃│    M13: preview lands here    │
 │  regex            r│┃╚════════════════════════════╝   ╰────────────────────────────╯┃│                               │
 │  reverse          e│┃               ▼                                │              ┃│                               │
 │  sort             s│┃╭────────────────────────────╮                  │              ┃│                               │

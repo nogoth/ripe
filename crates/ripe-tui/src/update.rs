@@ -7,10 +7,14 @@ use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent};
 
+use ripe_core::EvalReport;
 use ripe_core::params::{FieldKind, Params};
 use ripe_core::persist::{load_pipe, save_pipe};
 
-use crate::app::{App, EditParamsState, FieldEditor, Mode, Pane, PathAction};
+use crate::app::{
+    App, DEBOUNCE_TICKS, EditParamsState, EvalRequest, EvalScope, FieldEditor, Mode, Pane,
+    PathAction,
+};
 use crate::event::Msg;
 use crate::ui::palette::insert_letter;
 
@@ -23,7 +27,18 @@ pub fn update(app: &mut App, msg: Msg) {
         Msg::ToggleHelp => app.show_help = !app.show_help,
         Msg::Dismiss => on_dismiss(app),
         Msg::Quit => on_quit(app),
-        Msg::Tick => {}
+        Msg::Tick => on_tick(app),
+
+        Msg::RunAll => request_eval(app, EvalScope::All),
+        Msg::RunToSelected => match app.selected {
+            Some(sel) => request_eval(app, EvalScope::UpTo(sel)),
+            None => app.status = "run to: no node selected".to_string(),
+        },
+        Msg::EvalDone {
+            generation,
+            report,
+            error,
+        } => on_eval_done(app, generation, report, error),
 
         // In EditParams mode Ctrl-S applies params rather than saving the file.
         Msg::Save => {
@@ -125,6 +140,12 @@ fn on_key(app: &mut App, key: KeyEvent) {
         }
         Mode::EditParams(_) => on_key_edit_params(app, key),
         Mode::Normal => {
+            // Run commands work from any pane, so they precede the canvas gate.
+            match key.code {
+                KeyCode::Char('r') => return update(app, Msg::RunAll),
+                KeyCode::Char('R') => return update(app, Msg::RunToSelected),
+                _ => {}
+            }
             if app.focus != Pane::Canvas {
                 return;
             }
@@ -174,6 +195,72 @@ fn on_quit(app: &mut App) {
     } else {
         app.should_quit = true;
     }
+}
+
+// --- live execution (M12) ------------------------------------------------
+
+/// Arm the debounce timer after a graph edit. The run itself is spawned once
+/// the countdown expires on a later `Tick`, so a burst of edits (typing into a
+/// param field, several quick inserts) coalesces into one evaluation.
+fn schedule_eval(app: &mut App) {
+    app.eval.debounce = Some(DEBOUNCE_TICKS);
+}
+
+/// Request an eval *now*, bypassing the debounce (the manual `r`/`R` commands
+/// and the fired debounce both land here). Bumps the generation so any run
+/// already in flight is superseded, records the request for the event loop to
+/// spawn, and marks the covered nodes loading so spinners appear at once.
+fn request_eval(app: &mut App, scope: EvalScope) {
+    app.eval.debounce = None;
+    app.eval.generation += 1;
+    app.eval.running = true;
+    app.eval.loading = match scope {
+        EvalScope::All => app.pipe.nodes.iter().map(|n| n.id).collect(),
+        EvalScope::UpTo(target) => app.pipe.upstream_closure(&[target]),
+    };
+    app.eval.pending = Some(EvalRequest {
+        generation: app.eval.generation,
+        scope,
+    });
+    app.status = "evaluating…".to_string();
+}
+
+/// Once-per-tick timers: advance the spinner frame and step the debounce
+/// countdown, firing a whole-pipe run when it hits zero.
+fn on_tick(app: &mut App) {
+    app.tick_count = app.tick_count.wrapping_add(1);
+    match app.eval.debounce {
+        Some(n) if n <= 1 => request_eval(app, EvalScope::All),
+        Some(n) => app.eval.debounce = Some(n - 1),
+        None => {}
+    }
+}
+
+/// Fold a finished eval into the model. A result whose `generation` is not the
+/// current one comes from a superseded run and is dropped — this is the guard
+/// that stops a slow, stale eval from clobbering fresher output.
+fn on_eval_done(app: &mut App, generation: u64, report: EvalReport, error: Option<String>) {
+    if generation != app.eval.generation {
+        return;
+    }
+    app.eval.running = false;
+    app.eval.loading.clear();
+    if let Some(err) = error {
+        app.status = format!("eval failed: {}", err.lines().next().unwrap_or("error"));
+        return;
+    }
+    // A scoped ("run to selected") run only reports the nodes it touched, so
+    // merge over the existing statuses rather than replacing them; then prune
+    // entries for nodes deleted since the run was spawned.
+    let count = report.nodes.len();
+    for (id, node_report) in report.nodes {
+        app.statuses.insert(id, node_report);
+    }
+    app.statuses.retain(|id, _| app.pipe.node(*id).is_some());
+    app.status = format!(
+        "evaluated {count} node{}",
+        if count == 1 { "" } else { "s" }
+    );
 }
 
 // --- param-edit overlay --------------------------------------------------
@@ -390,6 +477,7 @@ fn do_apply_params(app: &mut App) {
         app.edit_state = None;
         app.mode = Mode::Normal;
         app.status = format!("params saved for {node_id}");
+        schedule_eval(app);
     } else {
         let state = app.edit_state.as_mut().unwrap();
         state.field_errors = field_errors;
@@ -490,6 +578,10 @@ fn do_confirm_prompt(app: &mut App) {
                 app.statuses.clear();
                 app.mode = Mode::Normal;
                 app.status = "loaded".to_string();
+                // A different graph entirely: drop the old memo cache, then
+                // evaluate the newcomer.
+                app.eval.reset_cache = true;
+                schedule_eval(app);
             }
             Err(e) => {
                 app.mode = Mode::Normal;
@@ -557,6 +649,7 @@ fn do_insert(app: &mut App, ch: char) {
             app.selected = Some(new_id);
             app.dirty = true;
             app.status.clear();
+            schedule_eval(app);
             return;
         }
         // Splice is type-invalid: fall back to adding unwired.
@@ -567,6 +660,7 @@ fn do_insert(app: &mut App, ch: char) {
     let new_id = app.pipe.add_node(kind, Params::new());
     app.selected = Some(new_id);
     app.dirty = true;
+    schedule_eval(app);
 }
 
 // --- delete --------------------------------------------------------------
@@ -583,8 +677,11 @@ fn do_delete_node(app: &mut App) {
     if app.selected.is_none() {
         app.selected = app.pipe.topo_order().ok().and_then(|o| o.first().copied());
     }
+    // The node is gone; drop its stale status so nothing lingers on the canvas.
+    app.statuses.remove(&id);
     app.dirty = true;
     app.status = format!("deleted {id}");
+    schedule_eval(app);
 }
 
 fn do_delete_edge(app: &mut App) {
@@ -598,6 +695,7 @@ fn do_delete_edge(app: &mut App) {
             .remove_edge(edge.from.node, &edge.from.port, edge.to.node, &edge.to.port);
         app.dirty = true;
         app.status = format!("removed edge {desc}");
+        schedule_eval(app);
     } else {
         app.status = format!("no edges into {id}");
     }
@@ -661,6 +759,7 @@ fn do_confirm_connect(app: &mut App) {
         app.pipe = candidate;
         app.dirty = true;
         app.status = format!("connected {from} → {to}");
+        schedule_eval(app);
     } else {
         app.status = errors[0].clone();
     }
@@ -699,6 +798,7 @@ mod tests {
     use super::*;
     use crate::app::{EditParamsState, FieldEditor, Mode, Pane};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ripe_core::engine::{NodeReport, NodeStatus};
     use ripe_core::params::{FieldKind, FieldSpec, ParamSchema};
     use ripe_core::{NodeId, Params, Pipe, Registry};
 
@@ -1673,5 +1773,226 @@ mod tests {
             .collect();
         assert!(scores.contains(&150.0));
         assert!(scores.contains(&200.0));
+    }
+
+    // --- M12 live-execution tests ----------------------------------------
+
+    /// An all-`Ok` report over `ids`, standing in for a finished eval.
+    fn ok_report(ids: &[NodeId]) -> EvalReport {
+        let mut report = EvalReport::default();
+        for &id in ids {
+            report.nodes.insert(
+                id,
+                NodeReport {
+                    status: NodeStatus::Ok,
+                    error: None,
+                    duration: std::time::Duration::ZERO,
+                    item_count: Some(1),
+                },
+            );
+        }
+        report
+    }
+
+    #[test]
+    fn a_burst_of_edits_coalesces_into_one_debounced_run() {
+        let (mut app, _) = canvas_app();
+        // Two edits before any tick fires.
+        update(&mut app, key_msg(KeyCode::Char('a')));
+        update(&mut app, key_msg(KeyCode::Char('f'))); // insert fetch_feed
+        update(&mut app, key_msg(KeyCode::Char('a')));
+        update(&mut app, key_msg(KeyCode::Char('t'))); // insert filter
+
+        assert_eq!(app.eval.debounce, Some(DEBOUNCE_TICKS));
+        assert!(app.eval.pending.is_none(), "no run while typing settles");
+        assert_eq!(app.eval.generation, 0);
+
+        // Drain the debounce; the run fires exactly once.
+        update(&mut app, Msg::Tick); // Some(2) -> Some(1)
+        assert!(app.eval.pending.is_none());
+        assert_eq!(app.eval.generation, 0);
+        update(&mut app, Msg::Tick); // Some(1) -> fire
+        let req = app.eval.pending.expect("debounce fires a request");
+        assert_eq!(req.scope, EvalScope::All);
+        assert_eq!(app.eval.generation, 1);
+
+        // Idle ticks never start a second run.
+        update(&mut app, Msg::Tick);
+        assert_eq!(app.eval.generation, 1, "settled edits run only once");
+    }
+
+    #[test]
+    fn each_edit_re_arms_the_debounce() {
+        let (mut app, [a, _b, _c]) = canvas_app();
+        app.selected = Some(a);
+        update(&mut app, key_msg(KeyCode::Char('a')));
+        update(&mut app, key_msg(KeyCode::Char('t'))); // edit -> debounce armed
+        update(&mut app, Msg::Tick); // Some(2) -> Some(1)
+        assert_eq!(app.eval.debounce, Some(1));
+
+        // A fresh edit resets the countdown to the top.
+        update(&mut app, key_msg(KeyCode::Char('a')));
+        update(&mut app, key_msg(KeyCode::Char('s'))); // sort
+        assert_eq!(app.eval.debounce, Some(DEBOUNCE_TICKS));
+        assert_eq!(app.eval.generation, 0, "still no run");
+    }
+
+    #[test]
+    fn run_all_marks_every_node_loading_and_requests_all() {
+        let (mut app, [a, b, c]) = canvas_app();
+        update(&mut app, key_msg(KeyCode::Char('r')));
+        let req = app.eval.pending.expect("run requested");
+        assert_eq!(req.scope, EvalScope::All);
+        assert_eq!(req.generation, 1);
+        assert_eq!(app.eval.loading, [a, b, c].into_iter().collect());
+        assert!(app.eval.running);
+    }
+
+    #[test]
+    fn run_to_selected_loads_only_the_ancestor_closure() {
+        let (mut app, [a, b, c]) = canvas_app(); // a -> b -> c
+        app.selected = Some(b);
+        update(&mut app, key_msg(KeyCode::Char('R')));
+        let req = app.eval.pending.expect("run requested");
+        assert_eq!(req.scope, EvalScope::UpTo(b));
+        // b and its upstream a, but never the downstream c.
+        assert_eq!(app.eval.loading, [a, b].into_iter().collect());
+        assert!(!app.eval.loading.contains(&c));
+    }
+
+    #[test]
+    fn run_to_selected_without_selection_is_a_noop() {
+        let mut app = app();
+        app.focus = Pane::Canvas;
+        app.selected = None;
+        update(&mut app, key_msg(KeyCode::Char('R')));
+        assert!(app.eval.pending.is_none());
+        assert_eq!(app.eval.generation, 0);
+    }
+
+    #[test]
+    fn a_stale_eval_result_is_dropped() {
+        let (mut app, [a, b, c]) = canvas_app();
+        update(&mut app, Msg::RunAll); // generation 1
+        assert_eq!(app.eval.generation, 1);
+        // A second run supersedes the first before it returns.
+        update(&mut app, Msg::RunAll); // generation 2
+        assert_eq!(app.eval.generation, 2);
+
+        // The late gen-1 result must not touch the model.
+        update(
+            &mut app,
+            Msg::EvalDone {
+                generation: 1,
+                report: ok_report(&[a, b, c]),
+                error: None,
+            },
+        );
+        assert!(
+            app.statuses.is_empty(),
+            "stale result must not populate statuses"
+        );
+        assert!(app.eval.running, "still waiting on the current run");
+        assert_eq!(app.eval.loading.len(), 3, "loading survives a stale result");
+
+        // The current gen-2 result lands and is applied.
+        update(
+            &mut app,
+            Msg::EvalDone {
+                generation: 2,
+                report: ok_report(&[a, b, c]),
+                error: None,
+            },
+        );
+        assert_eq!(app.statuses.len(), 3);
+        assert!(!app.eval.running);
+        assert!(app.eval.loading.is_empty());
+    }
+
+    #[test]
+    fn eval_done_applies_report_and_prunes_deleted_nodes() {
+        let (mut app, [a, b, _c]) = canvas_app();
+        update(&mut app, Msg::RunAll);
+
+        // The report references a node deleted while the run was in flight.
+        let mut report = ok_report(&[a, b]);
+        report.nodes.insert(
+            NodeId(999),
+            NodeReport {
+                status: NodeStatus::Ok,
+                error: None,
+                duration: std::time::Duration::ZERO,
+                item_count: Some(0),
+            },
+        );
+        update(
+            &mut app,
+            Msg::EvalDone {
+                generation: 1,
+                report,
+                error: None,
+            },
+        );
+        assert!(app.statuses.contains_key(&a));
+        assert!(app.statuses.contains_key(&b));
+        assert!(
+            !app.statuses.contains_key(&NodeId(999)),
+            "a report entry for a since-deleted node is pruned"
+        );
+        assert!(app.eval.loading.is_empty());
+    }
+
+    #[test]
+    fn eval_done_error_sets_status_and_clears_loading() {
+        let (mut app, _) = canvas_app();
+        update(&mut app, Msg::RunAll);
+        update(
+            &mut app,
+            Msg::EvalDone {
+                generation: 1,
+                report: EvalReport::default(),
+                error: Some("pipe contains a cycle (through node #2)".to_string()),
+            },
+        );
+        assert!(!app.eval.running);
+        assert!(app.eval.loading.is_empty());
+        assert!(app.status.contains("cycle"), "status was: {}", app.status);
+        assert!(app.statuses.is_empty());
+    }
+
+    #[test]
+    fn r_inside_the_param_overlay_types_rather_than_runs() {
+        let (mut app, [_a, b, _c]) = canvas_app();
+        app.selected = Some(b); // filter node
+        update(&mut app, key_msg(KeyCode::Enter)); // open overlay
+        assert!(matches!(app.mode, Mode::EditParams(_)));
+
+        update(&mut app, key_msg(KeyCode::Char('r')));
+        // No run: `r` was consumed by the focused text field.
+        assert!(app.eval.pending.is_none());
+        assert_eq!(app.eval.generation, 0);
+    }
+
+    #[test]
+    fn opening_a_pipe_requests_a_cache_reset_and_a_run() {
+        // Save a pipe, then load it and confirm the reset+run is queued.
+        let (mut app, _) = canvas_app();
+        let tmp = std::env::temp_dir().join(format!("ripe-m12-open-{}.pipe", std::process::id()));
+        save_pipe(&app.pipe, &tmp).unwrap();
+
+        // Drive the Open prompt.
+        update(&mut app, Msg::Open);
+        for ch in tmp.to_string_lossy().chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+        update(&mut app, key_msg(KeyCode::Enter));
+
+        assert!(app.eval.reset_cache, "load must drop the stale memo cache");
+        assert_eq!(
+            app.eval.debounce,
+            Some(DEBOUNCE_TICKS),
+            "load schedules a run"
+        );
+        std::fs::remove_file(&tmp).ok();
     }
 }

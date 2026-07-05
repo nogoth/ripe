@@ -4,6 +4,8 @@
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use ripe_core::EvalReport;
+
 /// A thing that happened, framed in the app's own vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Msg {
@@ -16,8 +18,22 @@ pub enum Msg {
     Dismiss,
     /// Tear down and exit.
     Quit,
-    /// The periodic timer fired (spinners, future async polling cadence).
+    /// The periodic timer fired (advances the debounce countdown + spinner).
     Tick,
+
+    // --- live execution (M12) -------------------------------------------
+    /// Run the whole pipe now (`r`).
+    RunAll,
+    /// Run only the selected node and its upstreams now (`R`).
+    RunToSelected,
+    /// An async eval finished. `generation` lets `update` discard the result
+    /// if a newer run has since superseded it; `error` is set only when the
+    /// run failed structurally (an empty `report` accompanies it).
+    EvalDone {
+        generation: u64,
+        report: EvalReport,
+        error: Option<String>,
+    },
 
     // --- canvas editing (M10) -------------------------------------------
     /// Save to the current path, or prompt if no path is set yet.
@@ -110,8 +126,12 @@ mod tests {
 
     #[test]
     fn q_and_editing_keys_fall_through_to_key() {
-        // q, a, d, x, c, j, k, h, l, 1-9 are all context-dependent.
-        for ch in ['q', 'a', 'd', 'x', 'c', 'j', 'k', 'h', 'l', '1', '5', '9'] {
+        // q, a, d, x, c, j, k, h, l, r, R, 1-9 are all context-dependent:
+        // update() reads the mode, so e.g. `r` runs in Normal but types in a
+        // param field.
+        for ch in [
+            'q', 'a', 'd', 'x', 'c', 'j', 'k', 'h', 'l', 'r', 'R', '1', '5', '9',
+        ] {
             let ev = key(KeyCode::Char(ch));
             assert_eq!(
                 from_key(ev),

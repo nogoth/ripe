@@ -1,7 +1,8 @@
 //! The App model: everything the view renders and the update fn mutates.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use ripe_core::engine::NodeReport;
 use ripe_core::params::{FieldKind, ParamSchema};
@@ -165,11 +166,62 @@ impl EditParamsState {
     }
 }
 
+// ---- live-eval wiring (M12) ---------------------------------------------
+
+/// How much of the graph one eval run covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvalScope {
+    /// The whole pipe. Memoization keeps this cheap: only nodes whose memo key
+    /// changed since the last run actually re-evaluate.
+    All,
+    /// Only `target` and its transitive upstreams ("run to selected").
+    UpTo(NodeId),
+}
+
+/// A request `update` hands to the event loop, which owns the async runtime,
+/// the shared cache, and the HTTP client. The loop spawns the eval and tags
+/// its `EvalDone` message with this `generation`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvalRequest {
+    pub generation: u64,
+    pub scope: EvalScope,
+}
+
+/// Live-eval bookkeeping. `update` mutates this synchronously; the event loop
+/// reads `pending`/`reset_cache` and performs the actual spawning, so the
+/// model stays pure and testable while I/O lives in `main`.
+#[derive(Debug, Default)]
+pub struct EvalState {
+    /// Monotonic run id. Bumped on every request; an `EvalDone` whose
+    /// generation is older than this is stale and dropped (supersede).
+    pub generation: u64,
+    /// A request the event loop has not yet spawned. Set by `update`, taken by
+    /// the loop.
+    pub pending: Option<EvalRequest>,
+    /// Ticks left before a debounced edit becomes a `pending` request. `None`
+    /// means no debounce is armed. Each edit re-arms it, so a burst of edits
+    /// coalesces into a single run once typing settles.
+    pub debounce: Option<u8>,
+    /// Ask the loop to drop the memo cache before the next run (set on load,
+    /// when the whole graph is replaced).
+    pub reset_cache: bool,
+    /// Nodes whose result the current run is still computing — drawn with a
+    /// spinner on the canvas until the run completes.
+    pub loading: BTreeSet<NodeId>,
+    /// Whether a run is in flight (drives the status line).
+    pub running: bool,
+}
+
+/// Ticks (at the event loop's ~250ms cadence) a burst of edits must settle
+/// before a debounced re-eval fires. Two ticks ≈ up to half a second.
+pub const DEBOUNCE_TICKS: u8 = 2;
+
 /// The editor state. Owns the registry so the palette can group the real
 /// module list without threading it through the view.
 pub struct App {
-    /// Module catalog, shared by palette, loader, and (later) engine.
-    pub registry: Registry,
+    /// Module catalog, shared by palette, loader, and the eval engine. `Arc`
+    /// so a spawned eval task can hold its own handle to the same catalog.
+    pub registry: Arc<Registry>,
     /// The pipe under edit. A fresh session starts on an empty, unsaved pipe.
     pub pipe: Pipe,
     /// Where the pipe was loaded from / will save to; `None` until first save.
@@ -194,6 +246,11 @@ pub struct App {
     pub status: String,
     /// State for the param-edit overlay (`Some` iff `mode == EditParams`).
     pub edit_state: Option<EditParamsState>,
+    /// Live-eval scheduling and per-node loading state (M12).
+    pub eval: EvalState,
+    /// Monotonic tick counter, advanced on every `Msg::Tick`; drives the
+    /// canvas spinner animation for loading nodes.
+    pub tick_count: u64,
 }
 
 impl App {
@@ -213,7 +270,7 @@ impl App {
             .ok()
             .and_then(|order| order.first().copied());
         Self {
-            registry,
+            registry: Arc::new(registry),
             pipe,
             path,
             dirty: false,
@@ -226,6 +283,8 @@ impl App {
             mode: Mode::Normal,
             status: String::new(),
             edit_state: None,
+            eval: EvalState::default(),
+            tick_count: 0,
         }
     }
 

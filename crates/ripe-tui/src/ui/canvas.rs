@@ -83,6 +83,7 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &mut App, focused: bool
     };
 
     draw_wires(&mut painter, &layout, &app.pipe, box_w);
+    let spinner = spinner_frame(app.tick_count);
     for (id, slot) in layout.iter() {
         let node = app.pipe.node(id).expect("layout ids come from the pipe");
         draw_box(
@@ -93,6 +94,8 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &mut App, focused: bool
             &node.kind,
             &node.params,
             app.statuses.get(&id),
+            app.eval.loading.contains(&id),
+            spinner,
             app.selected == Some(id),
         );
     }
@@ -301,6 +304,8 @@ fn draw_box(
     kind: &str,
     params: &Params,
     report: Option<&NodeReport>,
+    loading: bool,
+    spinner: char,
     selected: bool,
 ) {
     let x0 = col_x0(slot.col, box_w);
@@ -363,10 +368,16 @@ fn draw_box(
     let title = truncate(&format!("{}  {}", id.0, kind_title(kind)), inner_w);
     p.put_str(inner_x, top + 1, &title, title_style);
 
-    // Row 2: param summary on the left, eval status on the right.
+    // Row 2: param summary on the left, eval status on the right. A node that
+    // is currently (re-)evaluating shows a spinner in place of its last status.
     let detail = param_summary(kind, params);
-    match status_summary(report) {
-        Some(status) => {
+    let status_cell: Option<(String, Style)> = if loading {
+        Some((format!("{spinner} …"), Style::new().fg(Color::Yellow)))
+    } else {
+        status_summary(report).map(|s| (s, status_style(report)))
+    };
+    match status_cell {
+        Some((status, style)) => {
             let status_w = status.chars().count().min(inner_w);
             let detail_w = inner_w.saturating_sub(status_w + 1);
             p.put_str(
@@ -376,7 +387,7 @@ fn draw_box(
                 Style::new().fg(Color::Gray),
             );
             let sx = inner_x + (inner_w - status_w) as u16;
-            p.put_str(sx, top + 2, &status, status_style(report));
+            p.put_str(sx, top + 2, &status, style);
         }
         None => p.put_str(
             inner_x,
@@ -385,6 +396,13 @@ fn draw_box(
             Style::new().fg(Color::Gray),
         ),
     }
+}
+
+/// Braille spinner frames; the app's tick counter selects the phase, so the
+/// glyph advances once per event-loop tick while a node is loading.
+fn spinner_frame(tick: u64) -> char {
+    const FRAMES: [char; 8] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'];
+    FRAMES[(tick as usize) % FRAMES.len()]
 }
 
 /// Draw a `↑ more` / `↓ more` hint on the pane's top or bottom edge.
@@ -587,6 +605,15 @@ mod tests {
             status_summary(Some(&mk(NodeStatus::Unready, None, None))).as_deref(),
             Some("· unready")
         );
+    }
+
+    #[test]
+    fn spinner_advances_and_wraps_with_the_tick() {
+        // Distinct glyphs across a full cycle, wrapping back to the start.
+        let a = spinner_frame(0);
+        let b = spinner_frame(1);
+        assert_ne!(a, b, "consecutive ticks show different frames");
+        assert_eq!(spinner_frame(0), spinner_frame(8), "8 frames, then wrap");
     }
 
     #[test]

@@ -160,7 +160,7 @@ fn status_line(frame: &mut Frame, area: Rect, app: &App) {
     let keys = if matches!(app.mode, Mode::EditParams(_)) {
         "Ctrl-s apply   Esc cancel   ↑/↓ field "
     } else if app.focus == Pane::Canvas {
-        "a insert   d del   c connect   j/k move   tab switch pane   ? help   q quit "
+        "a insert   d del   c connect   r run   j/k move   tab pane   ? help   q quit "
     } else {
         "tab switch pane   ? help   q quit "
     };
@@ -370,6 +370,30 @@ mod tests {
         app.focus = Pane::Canvas;
         app.selected = Some(ids[0]); // highlight the head of the main branch
         app.statuses = statuses;
+        insta::assert_snapshot!(render_to_string(&mut app, 120, 40));
+    }
+
+    /// A run in flight: the two source nodes are mid-fetch and show a spinner
+    /// in place of a status; the rest carry their last item counts.
+    #[test]
+    fn canvas_shows_spinner_on_loading_nodes() {
+        let pipe = mockup_pipe();
+        let ids: Vec<NodeId> = pipe.nodes.iter().map(|n| n.id).collect();
+        let counts = [44, 32, 32, 12, 44, 44, 44, 44];
+        let statuses: BTreeMap<NodeId, NodeReport> =
+            ids.iter().zip(counts).map(|(&id, c)| (id, ok(c))).collect();
+
+        let mut app = App::with_pipe(
+            Registry::with_builtins(),
+            pipe,
+            PathBuf::from("news_pipeline.pipe"),
+        );
+        app.focus = Pane::Canvas;
+        app.selected = Some(ids[0]);
+        app.statuses = statuses;
+        // The two Fetch Feed sources (indices 0 and 4) are still fetching.
+        app.eval.loading = [ids[0], ids[4]].into_iter().collect();
+        app.tick_count = 0; // pin the spinner to its first frame
         insta::assert_snapshot!(render_to_string(&mut app, 120, 40));
     }
 

@@ -12,6 +12,7 @@ mod update;
 use std::io::{self, Stdout};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -23,10 +24,15 @@ use crossterm::terminal::{
 use futures::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use tokio::sync::Mutex;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinHandle;
 
-use ripe_core::{Registry, load_pipe};
+use ripe_core::engine::{Engine, EvalCache, EvalReport};
+use ripe_core::fetch::FetchClient;
+use ripe_core::{Bindings, EvalCtx, Registry, load_pipe};
 
-use app::App;
+use app::{App, EvalRequest, EvalScope};
 use event::Msg;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -92,8 +98,20 @@ async fn run(mut app: App) -> anyhow::Result<()> {
 
 async fn event_loop(terminal: &mut Tui, app: &mut App) -> anyhow::Result<()> {
     let mut events = EventStream::new();
-    // 250ms feeds future spinners; nothing consumes it yet beyond a redraw.
+    // 250ms drives the spinner animation and the edit-debounce countdown.
     let mut ticker = tokio::time::interval(Duration::from_millis(250));
+
+    // Async-result plumbing (M12): eval tasks run off the render thread and
+    // deliver their outcome back as a `Msg`. One HTTP client and one memo
+    // cache live for the whole session — the client so conditional-request
+    // caching survives across runs, the cache so editing only re-evaluates a
+    // node's descendants. The cache is behind a `Mutex` because each eval
+    // holds it mutably across `.await`s; aborting a superseded run drops the
+    // guard and frees it for the next.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
+    let http = FetchClient::default();
+    let cache = Arc::new(Mutex::new(EvalCache::new()));
+    let mut in_flight: Option<JoinHandle<()>> = None;
 
     terminal.draw(|frame| ui::render(frame, app))?;
     while !app.should_quit {
@@ -103,16 +121,85 @@ async fn event_loop(terminal: &mut Tui, app: &mut App) -> anyhow::Result<()> {
                 Some(Err(e)) => return Err(e).context("reading terminal events"),
                 None => break, // input stream closed
             },
+            Some(result) = rx.recv() => Some(result),
             _ = ticker.tick() => Some(Msg::Tick),
         };
         if let Some(msg) = msg {
             update::update(app, msg);
         }
+        // `update` is I/O-free; if it queued an eval, spawn it here.
+        if let Some(request) = app.eval.pending.take() {
+            let reset = std::mem::take(&mut app.eval.reset_cache);
+            spawn_eval(app, request, reset, &http, &cache, &tx, &mut in_flight).await;
+        }
         // Redraw every iteration: resize is handled implicitly by drawing into
         // the terminal's current size.
         terminal.draw(|frame| ui::render(frame, app))?;
     }
+    if let Some(handle) = in_flight {
+        handle.abort();
+    }
     Ok(())
+}
+
+/// Spawn (or supersede) an eval task for `request`. Aborts whatever is still
+/// running so it stops fetching and releases the cache lock, snapshots the
+/// pipe + registry, and lets the task deliver its report over `tx` tagged with
+/// the request's generation. Correctness against stale results rests on the
+/// generation check in `update`; the abort here is the latency/resource guard.
+#[allow(clippy::too_many_arguments)]
+async fn spawn_eval(
+    app: &App,
+    request: EvalRequest,
+    reset_cache: bool,
+    http: &FetchClient,
+    cache: &Arc<Mutex<EvalCache>>,
+    tx: &UnboundedSender<Msg>,
+    in_flight: &mut Option<JoinHandle<()>>,
+) {
+    if let Some(handle) = in_flight.take() {
+        handle.abort();
+    }
+    if reset_cache {
+        cache.lock().await.clear();
+    }
+
+    let engine = Engine::new(app.registry.clone());
+    let pipe = app.pipe.clone();
+    // Resolve pipe params from their declared defaults — the TUI has no
+    // `--param` overrides. On error, fall back to empty bindings so the engine
+    // reports per-node `${...}` errors instead of the whole run refusing.
+    let bindings = Bindings::resolve(&pipe.params, &[]).unwrap_or_default();
+    let ctx = EvalCtx::new(http.clone()).with_bindings(bindings);
+    let cache = cache.clone();
+    let tx = tx.clone();
+    let EvalRequest { generation, scope } = request;
+
+    *in_flight = Some(tokio::spawn(async move {
+        let outcome = {
+            let mut guard = cache.lock().await;
+            match scope {
+                EvalScope::All => engine.eval(&pipe, &mut guard, &ctx).await,
+                EvalScope::UpTo(target) => {
+                    engine.eval_upto(&pipe, &[target], &mut guard, &ctx).await
+                }
+            }
+        };
+        let msg = match outcome {
+            Ok(report) => Msg::EvalDone {
+                generation,
+                report,
+                error: None,
+            },
+            Err(e) => Msg::EvalDone {
+                generation,
+                report: EvalReport::default(),
+                error: Some(e.to_string()),
+            },
+        };
+        // The receiver only closes when the app is exiting; ignore that race.
+        let _ = tx.send(msg);
+    }));
 }
 
 /// Install the panic hook, then enter raw mode + the alternate screen.
