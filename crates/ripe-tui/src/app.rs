@@ -388,7 +388,10 @@ impl App {
             pipe,
             path,
             dirty: false,
-            focus: Pane::Palette,
+            // The canvas holds focus at startup so the "press a to add a
+            // node" hint is immediately actionable (M14 follow-up: the
+            // palette used to start focused, where `a` resolved to nothing).
+            focus: Pane::Canvas,
             selected,
             scroll: 0,
             hscroll: 0,

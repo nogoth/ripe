@@ -3,42 +3,42 @@ source: crates/ripe-tui/src/ui/mod.rs
 expression: "render_to_string(&mut app, 120, 40)"
 ---
  PIPES   EDIT  RUN  VIEW  HELP                               news_pipeline.pipe                               ● 3 nodes
-┏Palette━━━━━━━━━━━━━┓┌Canvas─────────────────────────────────────────────────────────┐┌Preview────────────────────────┐
-┃NODES               ┃│╔════════════════════════════╗                                 ││ FEED    ITEMS (0)    RAW      │
-┃  filter           t┃│║1  Fetch Feed               ║                                 ││                               │
-┃  limit            l┃│║https://example.com/rss     ║                                 ││No preview yet — press r to run│
-┃  regex            r┃│╚════════════════════════════╝                                 ││           the pipe.           │
-┃  reverse          e┃│               ▼                                               ││                               │
-┃  sort             s┃│╭────────────────────────────╮                                 ││                               │
-┃  tail             i┃╔Help — keymap═════════════════════════════════════════════════════════════╗                     │
-┃  transform        m┃║ GLOBAL                               CANVAS                              ║                     │
-┃  union            u┃║ r           Run all                  a           Insert node             ║                     │
-┃  unique           q┃║ R           Run to selected          d           Delete node             ║                     │
-┃                    ┃║ u           Undo                     x           Delete edge             ║                     │
-┃SOURCES             ┃║ Ctrl-r      Redo                     c           Connect from selected   ║                     │
-┃  fetch_csv        v┃║ :           Command palette          Enter       Edit params             ║                     │
-┃  fetch_feed       f┃║ Ctrl-s      Save pipe                j           Select downstream       ║                     │
-┃  fetch_json       j┃║ Ctrl-o      Open pipe                k           Select upstream         ║                     │
-┃                    ┃║ Tab         Next pane                h           Select left branch      ║                     │
-┃SINKS               ┃║ ?           Toggle help              l           Select right branch     ║                     │
-┃  output           o┃║ q           Quit                     1-9         jump to node badge      ║                     │
-┃                    ┃║                                      a <letter>  insert palette kind     ║                     │
-┃                    ┃║ MODES                                                                    ║                     │
-┃                    ┃║ Esc         dismiss / cancel         PREVIEW                             ║                     │
-┃                    ┃║ Ctrl-c      quit immediately         [           Previous preview tab    ║                     │
-┃                    ┃║                                      ]           Next preview tab        ║                     │
-┃                    ┃║                                      a           Toggle auto-refresh     ║                     │
-┃                    ┃║                                      j           Scroll down             ║                     │
-┃                    ┃║                                      k           Scroll up               ║                     │
-┃                    ┃║                                      g           Scroll to top           ║                     │
-┃                    ┃║                                      G           Scroll to bottom        ║                     │
-┃                    ┃╚══════════════════════════════════════════════════════════════════════════╝                     │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││ Rendered 0 i…Auto refresh: on │
-┗━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────────────────────────────────────┘└───────────────────────────────┘
- Mode: Normal                                                             : palette   tab switch pane   ? help   q quit
+┌Palette─────────────┐┏Canvas━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┌Preview────────────────────────┐
+│NODES               │┃╔════════════════════════════╗                                 ┃│ FEED    ITEMS (0)    RAW      │
+│  filter           t│┃║1  Fetch Feed               ║                                 ┃│                               │
+│  limit            l│┃║https://example.com/rss     ║                                 ┃│No preview yet — press r to run│
+│  regex            r│┃╚════════════════════════════╝                                 ┃│           the pipe.           │
+│  reverse          e│┃               ▼                                               ┃│                               │
+│  sort             s│┃╭────────────────────────────╮                                 ┃│                               │
+│  tail             i│┃│2  Filter                   │                                 ┃│                               │
+│  transform        m│╔Help — keymap═════════════════════════════════════════════════════════════╗                     │
+│  union            u│║ GLOBAL                               CANVAS                              ║                     │
+│  unique           q│║ r           Run all                  d           Delete node             ║                     │
+│                    │║ R           Run to selected          x           Delete edge             ║                     │
+│SOURCES             │║ u           Undo                     c           Connect from selected   ║                     │
+│  fetch_csv        v│║ Ctrl-r      Redo                     Enter       Edit params             ║                     │
+│  fetch_feed       f│║ a           Insert node              j           Select downstream       ║                     │
+│  fetch_json       j│║ :           Command palette          k           Select upstream         ║                     │
+│                    │║ Ctrl-s      Save pipe                h           Select left branch      ║                     │
+│SINKS               │║ Ctrl-o      Open pipe                l           Select right branch     ║                     │
+│  output           o│║ Tab         Next pane                1-9         jump to node badge      ║                     │
+│                    │║ ?           Toggle help              a <letter>  insert palette kind     ║                     │
+│                    │║ q           Quit                                                         ║                     │
+│                    │║                                      PREVIEW                             ║                     │
+│                    │║ MODES                                [           Previous preview tab    ║                     │
+│                    │║ Esc         dismiss / cancel         ]           Next preview tab        ║                     │
+│                    │║ Ctrl-c      quit immediately         a           Toggle auto-refresh     ║                     │
+│                    │║                                      j           Scroll down             ║                     │
+│                    │║                                      k           Scroll up               ║                     │
+│                    │║                                      g           Scroll to top           ║                     │
+│                    │║                                      G           Scroll to bottom        ║                     │
+│                    │╚══════════════════════════════════════════════════════════════════════════╝                     │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│ Rendered 0 i…Auto refresh: on │
+└────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────┘
+ Mode: Normal                              a insert   d del   c connect   r run   j/k move   tab pane   ? help   q quit

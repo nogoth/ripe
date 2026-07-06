@@ -21,8 +21,8 @@ use crate::ui::theme::Theme;
 /// The insert letter for a node kind, per PLAN.md keybindings table.
 ///
 /// Letters are assigned to avoid collisions with:
-/// - global keys: Tab, ?, Esc, Ctrl-C/S/O
-/// - canvas normal-mode keys: a (leader), d, x, c, j, k, h, l, q, 1-9
+/// - global keys: Tab, ?, Esc, Ctrl-C/S/O, a (the insert leader)
+/// - canvas normal-mode keys: d, x, c, j, k, h, l, q, 1-9
 ///
 /// Assignments:
 /// | letter | kind        |

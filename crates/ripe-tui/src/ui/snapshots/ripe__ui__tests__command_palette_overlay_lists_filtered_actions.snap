@@ -3,42 +3,42 @@ source: crates/ripe-tui/src/ui/mod.rs
 expression: "render_to_string(&mut app, 120, 40)"
 ---
  PIPES   EDIT  RUN  VIEW  HELP                               news_pipeline.pipe                               ● 3 nodes
-┏Palette━━━━━━━━━━━━━┓┌Canvas─────────────────────────────────────────────────────────┐┌Preview────────────────────────┐
-┃NODES               ┃│╔════════════════════════════╗                                 ││ FEED    ITEMS (0)    RAW      │
-┃  filter           t┃│║1  Fetch Feed               ║                                 ││                               │
-┃  limit            l┃│║https://example.com/rss     ║                                 ││No preview yet — press r to run│
-┃  regex            r┃│╚════════════════════════════╝                                 ││           the pipe.           │
-┃  reverse          e┃│               ▼                                               ││                               │
-┃  sort             s┃│╭────────────────────────────╮                                 ││                               │
-┃  tail             i┃││2  Filter                   │                                 ││                               │
-┃  transform        m┃││(no rules)                  │                                 ││                               │
-┃  union            u┃│╰────────────────────────────╯                                 ││                               │
-┃  unique           q┃│               ▼                                               ││                               │
-┃                    ┃│╭────────────────────────────╮                                 ││                               │
-┃SOURCES             ┃││3  Output                   │                                 ││                               │
-┃  fetch_csv        v┃││rss → stdout                │                                 ││                               │
-┃  fetch_feed       f┃│╰────────────────────────────╯                                 ││                               │
-┃  fetch_json       j┃│                                                               ││                               │
-┃                    ┃│             ╔Command═══════════════════════════════════════╗  ││                               │
-┃SINKS               ┃│             ║ > run█                                       ║  ││                               │
-┃  output           o┃│             ║ ▶ Run all                                  r ║  ││                               │
-┃                    ┃│             ║   Run to selected                          R ║  ││                               │
-┃                    ┃│             ╚══════════════════════════════════════════════╝  ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││ Rendered 0 i…Auto refresh: on │
-┗━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────────────────────────────────────┘└───────────────────────────────┘
+┌Palette─────────────┐┏Canvas━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┌Preview────────────────────────┐
+│NODES               │┃╔════════════════════════════╗                                 ┃│ FEED    ITEMS (0)    RAW      │
+│  filter           t│┃║1  Fetch Feed               ║                                 ┃│                               │
+│  limit            l│┃║https://example.com/rss     ║                                 ┃│No preview yet — press r to run│
+│  regex            r│┃╚════════════════════════════╝                                 ┃│           the pipe.           │
+│  reverse          e│┃               ▼                                               ┃│                               │
+│  sort             s│┃╭────────────────────────────╮                                 ┃│                               │
+│  tail             i│┃│2  Filter                   │                                 ┃│                               │
+│  transform        m│┃│(no rules)                  │                                 ┃│                               │
+│  union            u│┃╰────────────────────────────╯                                 ┃│                               │
+│  unique           q│┃               ▼                                               ┃│                               │
+│                    │┃╭────────────────────────────╮                                 ┃│                               │
+│SOURCES             │┃│3  Output                   │                                 ┃│                               │
+│  fetch_csv        v│┃│rss → stdout                │                                 ┃│                               │
+│  fetch_feed       f│┃╰────────────────────────────╯                                 ┃│                               │
+│  fetch_json       j│┃                                                               ┃│                               │
+│                    │┃             ╔Command═══════════════════════════════════════╗  ┃│                               │
+│SINKS               │┃             ║ > run█                                       ║  ┃│                               │
+│  output           o│┃             ║ ▶ Run all                                  r ║  ┃│                               │
+│                    │┃             ║   Run to selected                          R ║  ┃│                               │
+│                    │┃             ╚══════════════════════════════════════════════╝  ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│ Rendered 0 i…Auto refresh: on │
+└────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────┘
  Mode: Command                                                      type to filter   ↑/↓ select   Enter run   Esc close

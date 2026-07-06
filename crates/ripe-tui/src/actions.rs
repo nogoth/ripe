@@ -51,8 +51,8 @@ pub enum Action {
     CommandPalette,
     Help,
     NextPane,
-    // Canvas
     Insert,
+    // Canvas
     DeleteNode,
     DeleteEdge,
     Connect,
@@ -222,6 +222,16 @@ pub const CATALOG: &[ActionInfo] = &[
         "redo",
         KeyPattern::ctrl(KeyCode::Char('r')),
     ),
+    // Insert is global so the leader works from the palette — the pane that
+    // displays the insert letters (M14 follow-up; same treatment as quit).
+    // The preview still owns `a` for auto-refresh: pane context wins.
+    row(
+        Action::Insert,
+        Context::Global,
+        "Insert node",
+        "insert",
+        KeyPattern::plain(KeyCode::Char('a')),
+    ),
     row(
         Action::CommandPalette,
         Context::Global,
@@ -265,13 +275,6 @@ pub const CATALOG: &[ActionInfo] = &[
         KeyPattern::plain(KeyCode::Char('q')),
     ),
     // --- canvas -----------------------------------------------------------
-    row(
-        Action::Insert,
-        Context::Canvas,
-        "Insert node",
-        "insert",
-        KeyPattern::plain(KeyCode::Char('a')),
-    ),
     row(
         Action::DeleteNode,
         Context::Canvas,
@@ -423,6 +426,7 @@ impl Keymap {
     pub fn with_overrides(overrides: &BTreeMap<String, String>) -> (Self, Vec<String>) {
         let mut keymap = Keymap::default();
         let mut warnings = Vec::new();
+        let mut remapped = vec![false; keymap.bindings.len()];
         for (name, spec) in overrides {
             let Some(idx) = CATALOG.iter().position(|i| i.config_key == name) else {
                 warnings.push(format!("config keys: unknown action `{name}`"));
@@ -437,11 +441,17 @@ impl Keymap {
                 continue;
             };
             keymap.bindings[idx].pattern = pattern;
+            remapped[idx] = true;
         }
         // Same key claimed twice in one scope: the first (catalog order) wins
-        // at resolve time; say so rather than silently shadowing.
+        // at resolve time; say so rather than silently shadowing. Only pairs
+        // a remap created are reported — the catalog itself layers keys on
+        // purpose (global Insert `a` under the preview's auto-refresh `a`).
         for (i, a) in keymap.bindings.iter().enumerate() {
-            for b in &keymap.bindings[i + 1..] {
+            for (j, b) in keymap.bindings.iter().enumerate().skip(i + 1) {
+                if !remapped[i] && !remapped[j] {
+                    continue;
+                }
                 let overlap = a.context == b.context
                     || a.context == Context::Global
                     || b.context == Context::Global;
@@ -579,15 +589,15 @@ mod tests {
     #[test]
     fn defaults_resolve_by_context() {
         let km = Keymap::default();
-        // `a` is Insert on the canvas, auto-refresh in the preview, and
-        // nothing globally.
+        // `a` is Insert everywhere (global) except the preview, whose own
+        // `a` binding (auto-refresh) wins over the global fallback.
         let a = key(KeyCode::Char('a'));
         assert_eq!(km.resolve(&a, Some(Context::Canvas)), Some(Action::Insert));
         assert_eq!(
             km.resolve(&a, Some(Context::Preview)),
             Some(Action::ToggleAutoRefresh)
         );
-        assert_eq!(km.resolve(&a, None), None);
+        assert_eq!(km.resolve(&a, None), Some(Action::Insert));
         // `q` quits from every context (global fallback).
         let q = key(KeyCode::Char('q'));
         for ctx in [None, Some(Context::Canvas), Some(Context::Preview)] {
@@ -648,6 +658,14 @@ mod tests {
         assert_eq!(warnings.len(), 3, "warnings: {warnings:?}");
         // Labels reflect the remap.
         assert_eq!(km.label(Action::RunAll), "e");
+    }
+
+    #[test]
+    fn default_catalog_layering_produces_no_warnings() {
+        // Global Insert `a` under the preview's auto-refresh `a` is deliberate
+        // layering, not a conflict.
+        let (_, warnings) = Keymap::with_overrides(&BTreeMap::new());
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
     }
 
     #[test]

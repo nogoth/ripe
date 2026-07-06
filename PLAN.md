@@ -421,6 +421,14 @@ should leave the tree compiling and tested.
       there is no position to drag a node to.
 - [ ] Theming (color config) + light/dark.
 - [ ] Configurable keybindings.
+- [x] Palette insert letters dead at startup (found post-M14 in a tmux smoke
+      test): the app started with the palette focused, where `a` (Insert, a
+      canvas-context binding) resolved to nothing — so the letters the palette
+      itself displays did nothing until Tab moved focus to the canvas. Fixed
+      the same way as the M12 quit finding: Insert is now a Global binding
+      (the preview's `a` auto-refresh still wins via pane context), and the
+      app starts with the canvas focused so "press a to add a node" is
+      immediately actionable.
 - **Done when:** a new user can discover actions without reading the source.
 
 ### M15: Docs

@@ -158,8 +158,8 @@ fn on_key(app: &mut App, key: KeyEvent) {
         Mode::Normal => {
             // The keymap owns every Normal-mode binding: the focused pane's
             // context is consulted first, then the global bindings — so `q`
-            // quits from any pane while `a` still means Insert only on the
-            // canvas and auto-refresh only in the preview.
+            // quits and `a` inserts from any pane, except in the preview
+            // where `a` means auto-refresh (pane context wins).
             let context = match app.focus {
                 Pane::Canvas => Some(Context::Canvas),
                 Pane::Preview => Some(Context::Preview),
@@ -1200,13 +1200,29 @@ mod tests {
     #[test]
     fn tab_cycles_focus_through_all_panes_and_wraps() {
         let mut app = app();
-        assert_eq!(app.focus, Pane::Palette);
-        update(&mut app, Msg::NextPane);
+        // Startup focus is the canvas, so the "press a to add a node" hint is
+        // immediately actionable.
         assert_eq!(app.focus, Pane::Canvas);
         update(&mut app, Msg::NextPane);
         assert_eq!(app.focus, Pane::Preview);
         update(&mut app, Msg::NextPane);
         assert_eq!(app.focus, Pane::Palette);
+        update(&mut app, Msg::NextPane);
+        assert_eq!(app.focus, Pane::Canvas);
+    }
+
+    #[test]
+    fn insert_leader_works_with_palette_focus() {
+        // The palette displays the insert letters, so `a` + letter must work
+        // there too (M14 follow-up: it used to resolve to nothing).
+        let mut app = app();
+        app.focus = Pane::Palette;
+        update(&mut app, key_msg(KeyCode::Char('a')));
+        assert_eq!(app.mode, Mode::InsertPending);
+        assert_eq!(app.focus, Pane::Canvas, "insert claims the canvas");
+        update(&mut app, key_msg(KeyCode::Char('v'))); // fetch_csv
+        assert_eq!(app.pipe.nodes.len(), 1);
+        assert_eq!(app.pipe.nodes[0].kind, "fetch_csv");
     }
 
     #[test]

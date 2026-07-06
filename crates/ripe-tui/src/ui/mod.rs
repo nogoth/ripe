@@ -211,7 +211,8 @@ fn hint_line(app: &App) -> String {
             k(Action::RunAll),
         ),
         Pane::Palette => format!(
-            "{} palette   tab switch pane   ? help   {} quit ",
+            "{} insert   {} palette   tab switch pane   ? help   {} quit ",
+            k(Action::Insert),
             k(Action::CommandPalette),
             k(Action::Quit),
         ),
