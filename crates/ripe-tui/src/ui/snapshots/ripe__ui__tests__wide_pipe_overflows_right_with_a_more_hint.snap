@@ -1,0 +1,44 @@
+---
+source: crates/ripe-tui/src/ui/mod.rs
+expression: rendered
+---
+ PIPES   EDIT  RUN  VIEW  HELP                                    wide.pipe                                   ● 7 nodes
+┌Palette─────────────┐┏Canvas━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┌Preview────────────────────────┐
+│NODES               │┃╔════════════════════════════╗   ╭────────────────────────────╮┃│ FEED    ITEMS (0)    RAW      │
+│  filter           t│┃║1  Fetch Feed               ║   │2  Fetch Feed               │┃│                               │
+│  limit            l│┃║https://s0.dev/rss          ║   │https://s1.dev/rss          │┃│No preview yet — press r to run│
+│  regex            r│┃╚════════════════════════════╝   ╰────────────────────────────╯┃│           the pipe.           │
+│  reverse          e│┃               ├────────────────────────────────┴──────────────┃│                               │
+│  sort             s│┃╭────────────────────────────╮                                 ┃│                               │
+│  tail             i│┃│6  Union                    │                                 ┃│                               │
+│  transform        m│┃│merge streams               │                                 ┃│                               │
+│  union            u│┃╰────────────────────────────╯                                 ┃│                               │
+│  unique           q│┃               ▼                                               ┃│                               │
+│                    │┃╭────────────────────────────╮                                 ┃│                               │
+│SOURCES             │┃│7  Output                   │                                 ┃│                               │
+│  fetch_csv        v│┃│rss → stdout                │                                 ┃│                               │
+│  fetch_feed       f│┃╰────────────────────────────╯                                 ┃│                               │
+│  fetch_json       j│┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│SINKS               │┃                                                               ┃│                               │
+│  output           o│┃                                                               ┃│                               │
+│                    │┃                                                         → more┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│                               │
+│                    │┃                                                               ┃│ Rendered 0 i…Auto refresh: on │
+└────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────┘
+ Mode: Normal                              a insert   d del   c connect   r run   j/k move   tab pane   ? help   q quit

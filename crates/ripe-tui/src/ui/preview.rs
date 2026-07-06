@@ -18,6 +18,7 @@ use ripe_core::preview::Preview;
 use crate::app::{App, PreviewTab};
 use crate::ui::canvas::spinner_frame;
 use crate::ui::pane_block;
+use crate::ui::theme::Theme;
 
 pub(crate) fn render(frame: &mut Frame, area: Rect, app: &mut App, focused: bool) {
     // The block title echoes the mockup's "PREVIEW: <feed>" once a run has
@@ -26,7 +27,8 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &mut App, focused: bool
         Some(snap) => format!("Preview: {}", snap.feed.title),
         None => "Preview".to_string(),
     };
-    let block = pane_block(&title, focused);
+    let theme = app.theme;
+    let block = pane_block(&title, focused, &theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -52,10 +54,11 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
         format!("ITEMS ({count})"),
         "RAW".to_string(),
     ];
+    let theme = app.theme;
     let tabs = Tabs::new(titles)
         .select(app.preview.tab.index())
-        .highlight_style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-        .style(Style::new().fg(Color::DarkGray))
+        .highlight_style(Style::new().fg(theme.accent).add_modifier(Modifier::BOLD))
+        .style(Style::new().fg(theme.text_faint))
         .divider("  ");
     frame.render_widget(tabs, area);
 }
@@ -63,8 +66,9 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
 fn render_body(frame: &mut Frame, area: Rect, app: &mut App) {
     // An error (or empty-state note) replaces the body for every tab: never
     // show stale output next to a failure.
+    let theme = app.theme;
     if let Some(err) = &app.preview.error {
-        notice(frame, area, err, Color::Red);
+        notice(frame, area, err, theme.err);
         return;
     }
     let height = area.height as usize;
@@ -75,14 +79,14 @@ fn render_body(frame: &mut Frame, area: Rect, app: &mut App) {
                 frame,
                 area,
                 "No preview yet — press r to run the pipe.",
-                Color::DarkGray,
+                theme.text_faint,
             );
             return;
         }
         Some(snap) => match app.preview.tab {
-            PreviewTab::Feed => feed_lines(snap),
-            PreviewTab::Items => item_lines(snap, width),
-            PreviewTab::Raw => raw_lines(snap),
+            PreviewTab::Feed => feed_lines(snap, &theme),
+            PreviewTab::Items => item_lines(snap, width, &theme),
+            PreviewTab::Raw => raw_lines(snap, &theme),
         },
     };
 
@@ -98,7 +102,8 @@ fn render_body(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let dim = Style::new().fg(Color::DarkGray);
+    let theme = app.theme;
+    let dim = Style::new().fg(theme.text_faint);
     let width = area.width as usize;
 
     // Right: the auto-refresh toggle, always shown in full and right-aligned.
@@ -119,7 +124,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
         // A run is in flight — a source fetch may be mid-flight. Spin.
         (
             format!(" {} evaluating…", spinner_frame(app.tick_count)),
-            Style::new().fg(Color::Yellow),
+            Style::new().fg(theme.warn),
         )
     } else if let Some(snap) = &app.preview.snapshot {
         (
@@ -132,7 +137,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
             dim,
         )
     } else if app.preview.error.is_some() {
-        (" eval error".to_string(), Style::new().fg(Color::Red))
+        (" eval error".to_string(), Style::new().fg(theme.err))
     } else {
         (" Rendered 0 items".to_string(), dim)
     };
@@ -151,39 +156,39 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
 // --- tab bodies ----------------------------------------------------------
 
 /// FEED: channel-level metadata as a key/value list.
-fn feed_lines(snap: &Preview) -> Vec<Line<'static>> {
+fn feed_lines(snap: &Preview, theme: &Theme) -> Vec<Line<'static>> {
     let meta = &snap.feed;
     vec![
         Line::raw(""),
-        kv("Title", &meta.title),
-        kv("Link", meta.link.as_deref().unwrap_or("—")),
-        kv("Description", &meta.description),
-        kv("Format", meta.format.name()),
-        kv("Items", &snap.count.to_string()),
+        kv("Title", &meta.title, theme),
+        kv("Link", meta.link.as_deref().unwrap_or("—"), theme),
+        kv("Description", &meta.description, theme),
+        kv("Format", meta.format.name(), theme),
+        kv("Items", &snap.count.to_string(), theme),
         Line::raw(""),
         Line::from(Span::styled(
             format!(" Last eval {}", snap.updated_label()),
-            Style::new().fg(Color::DarkGray),
+            Style::new().fg(theme.text_faint),
         )),
     ]
 }
 
-fn kv(label: &str, value: &str) -> Line<'static> {
+fn kv(label: &str, value: &str, theme: &Theme) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!(" {label:<12}"), Style::new().fg(Color::DarkGray)),
+        Span::styled(format!(" {label:<12}"), Style::new().fg(theme.text_faint)),
         Span::raw(value.to_string()),
     ])
 }
 
 /// ITEMS: a card per item — bullet + bold title with a right-aligned age,
 /// then the domain, a blank line, and up to two wrapped snippet lines.
-fn item_lines(snap: &Preview, width: usize) -> Vec<Line<'static>> {
+fn item_lines(snap: &Preview, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     if snap.cards.is_empty() {
         return vec![
             Line::raw(""),
             Line::from(Span::styled(
                 " (no items)",
-                Style::new().fg(Color::DarkGray),
+                Style::new().fg(theme.text_faint),
             )),
         ];
     }
@@ -193,14 +198,14 @@ fn item_lines(snap: &Preview, width: usize) -> Vec<Line<'static>> {
             // A faint divider between cards, echoing the mockup.
             lines.push(Line::from(Span::styled(
                 "─".repeat(width),
-                Style::new().fg(Color::Rgb(40, 40, 40)),
+                Style::new().fg(theme.divider),
             )));
         }
-        lines.push(title_line(&card.title, &card.age, width));
+        lines.push(title_line(&card.title, &card.age, width, theme));
         if !card.domain.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!("  {}", card.domain),
-                Style::new().fg(Color::DarkGray),
+                Style::new().fg(theme.text_faint),
             )));
         }
         if !card.snippet.is_empty() {
@@ -208,7 +213,7 @@ fn item_lines(snap: &Preview, width: usize) -> Vec<Line<'static>> {
             for wrapped in wrap(&card.snippet, width.saturating_sub(2), 2) {
                 lines.push(Line::from(Span::styled(
                     format!("  {wrapped}"),
-                    Style::new().fg(Color::Gray),
+                    Style::new().fg(theme.text_dim),
                 )));
             }
         }
@@ -218,7 +223,7 @@ fn item_lines(snap: &Preview, width: usize) -> Vec<Line<'static>> {
 
 /// The title line: ` ● <title>` on the left, the age right-aligned. The title
 /// is truncated so the age always fits.
-fn title_line(title: &str, age: &str, width: usize) -> Line<'static> {
+fn title_line(title: &str, age: &str, width: usize, theme: &Theme) -> Line<'static> {
     const LEAD: usize = 3; // " ● "
     const TRAIL: usize = 1; // a right margin
     let age_w = age.chars().count();
@@ -229,7 +234,7 @@ fn title_line(title: &str, age: &str, width: usize) -> Line<'static> {
 
     let mut spans = vec![
         Span::raw(" "),
-        Span::styled("●", Style::new().fg(Color::Cyan)),
+        Span::styled("●", Style::new().fg(theme.accent)),
         Span::raw(" "),
         Span::styled(title, Style::new().add_modifier(Modifier::BOLD)),
     ];
@@ -238,17 +243,17 @@ fn title_line(title: &str, age: &str, width: usize) -> Line<'static> {
         spans.push(Span::raw(" ".repeat(pad)));
         spans.push(Span::styled(
             age.to_string(),
-            Style::new().fg(Color::DarkGray),
+            Style::new().fg(theme.text_faint),
         ));
     }
     Line::from(spans)
 }
 
 /// RAW: the serialized feed, one screen line per source line.
-fn raw_lines(snap: &Preview) -> Vec<Line<'static>> {
+fn raw_lines(snap: &Preview, theme: &Theme) -> Vec<Line<'static>> {
     snap.raw
         .lines()
-        .map(|l| Line::from(Span::styled(l.to_string(), Style::new().fg(Color::Gray))))
+        .map(|l| Line::from(Span::styled(l.to_string(), Style::new().fg(theme.text_dim))))
         .collect()
 }
 

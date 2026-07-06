@@ -9,7 +9,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 
@@ -17,6 +17,7 @@ use ripe_core::params::FieldKind;
 
 use crate::app::{App, EditParamsState, FieldEditor, Mode};
 use crate::ui::centered_rect;
+use crate::ui::theme::Theme;
 
 /// Render the param-edit overlay when `app.mode == EditParams`.
 /// Takes `app: &App` (read-only) because only the canvas auto-mutates scroll.
@@ -27,6 +28,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let Some(state) = &app.edit_state else {
         return;
     };
+    let theme = app.theme;
 
     // Overlay: roughly 60 % wide and 70 % tall, at least 40×10.
     let ow = ((area.width as u32 * 6 / 10) as u16)
@@ -46,7 +48,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     let block = Block::bordered()
         .border_type(BorderType::Double)
-        .border_style(Style::new().fg(Color::Cyan))
+        .border_style(Style::new().fg(theme.accent))
         .title(title);
     let inner = block.inner(overlay);
     frame.render_widget(block, overlay);
@@ -65,6 +67,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             width: inner.width,
             height: 1,
         },
+        &theme,
     );
 
     // Form error — one row above the footer (when present).
@@ -81,6 +84,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                     height: 1,
                 },
                 err,
+                &theme,
             );
         }
     }
@@ -108,53 +112,45 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         };
         frame.render_widget(
             Paragraph::new("no params")
-                .style(Style::new().fg(Color::DarkGray))
+                .style(Style::new().fg(theme.text_faint))
                 .alignment(Alignment::Center),
             r,
         );
         return;
     }
 
-    render_fields(frame, fields_rect, state);
+    render_fields(frame, fields_rect, state, &theme);
 }
 
 // --- sub-renderers -------------------------------------------------------
 
-fn render_footer(frame: &mut Frame, rect: Rect) {
+fn render_footer(frame: &mut Frame, rect: Rect, theme: &Theme) {
+    let key = Style::new().fg(theme.warn).add_modifier(Modifier::BOLD);
     let line = Line::from(vec![
-        Span::styled(
-            "Ctrl-s",
-            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("Ctrl-s", key),
         Span::raw(" apply   "),
-        Span::styled(
-            "Esc",
-            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("Esc", key),
         Span::raw(" cancel   "),
-        Span::styled(
-            "↑/↓",
-            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        ),
+        Span::styled("↑/↓", key),
         Span::raw(" field"),
     ]);
     frame.render_widget(Paragraph::new(line), rect);
 }
 
-fn render_form_error(frame: &mut Frame, rect: Rect, err: &str) {
+fn render_form_error(frame: &mut Frame, rect: Rect, err: &str, theme: &Theme) {
     let line = Line::from(vec![
         Span::styled(
             "⚠ ",
-            Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::new().fg(theme.err).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(err.to_string(), Style::new().fg(Color::Red)),
+        Span::styled(err.to_string(), Style::new().fg(theme.err)),
     ]);
     frame.render_widget(Paragraph::new(line), rect);
 }
 
 /// Render the field list inside `area`, top-to-bottom. Stops when the area
 /// is exhausted so the footer is never overwritten.
-fn render_fields(frame: &mut Frame, area: Rect, state: &EditParamsState) {
+fn render_fields(frame: &mut Frame, area: Rect, state: &EditParamsState, theme: &Theme) {
     let mut y = area.y;
     let bottom = area.y + area.height;
 
@@ -174,9 +170,9 @@ fn render_fields(frame: &mut Frame, area: Rect, state: &EditParamsState) {
 
         // --- Label row ---------------------------------------------------
         let label_style = if is_focused {
-            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)
         } else {
-            Style::new().fg(Color::DarkGray)
+            Style::new().fg(theme.text_faint)
         };
         // Add a kind hint in brackets so the type is visible at a glance.
         let kind_tag = match &field.kind {
@@ -215,7 +211,7 @@ fn render_fields(frame: &mut Frame, area: Rect, state: &EditParamsState) {
                 width: area.width.saturating_sub(2),
                 height: avail,
             };
-            render_field_editor(frame, editor_rect, editor, is_focused);
+            render_field_editor(frame, editor_rect, editor, is_focused, theme);
             y += avail;
         }
 
@@ -224,8 +220,8 @@ fn render_fields(frame: &mut Frame, area: Rect, state: &EditParamsState) {
             && y < bottom
         {
             let err_line = Line::from(vec![
-                Span::styled("  ⚠ ", Style::new().fg(Color::Red)),
-                Span::styled(err.to_string(), Style::new().fg(Color::Red)),
+                Span::styled("  ⚠ ", Style::new().fg(theme.err)),
+                Span::styled(err.to_string(), Style::new().fg(theme.err)),
             ]);
             frame.render_widget(
                 Paragraph::new(err_line),
@@ -245,12 +241,18 @@ fn render_fields(frame: &mut Frame, area: Rect, state: &EditParamsState) {
 }
 
 /// Draw one field editor widget into `rect`.
-fn render_field_editor(frame: &mut Frame, rect: Rect, editor: &FieldEditor, focused: bool) {
+fn render_field_editor(
+    frame: &mut Frame,
+    rect: Rect,
+    editor: &FieldEditor,
+    focused: bool,
+    theme: &Theme,
+) {
     if rect.width == 0 || rect.height == 0 {
         return;
     }
-    let focus_style = Style::new().fg(Color::White);
-    let unfocus_style = Style::new().fg(Color::DarkGray);
+    let focus_style = Style::new().fg(theme.text);
+    let unfocus_style = Style::new().fg(theme.text_faint);
 
     match editor {
         FieldEditor::Text(ta) | FieldEditor::RuleList(ta) => {
@@ -277,7 +279,7 @@ fn render_field_editor(frame: &mut Frame, rect: Rect, editor: &FieldEditor, focu
                     let span = if j == *idx {
                         Span::styled(
                             format!("[{v}]"),
-                            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
                         )
                     } else if focused {
                         Span::styled(v.to_string(), focus_style)

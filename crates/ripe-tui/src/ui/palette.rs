@@ -8,7 +8,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -16,6 +16,7 @@ use ripe_core::Registry;
 
 use crate::app::App;
 use crate::ui::pane_block;
+use crate::ui::theme::Theme;
 
 /// The insert letter for a node kind, per PLAN.md keybindings table.
 ///
@@ -87,36 +88,71 @@ fn grouped(registry: &Registry) -> Groups {
     groups
 }
 
+/// The module kind rendered on palette row `row` (0-based, relative to the
+/// pane's inner top). Mirrors the row structure `render` produces — header,
+/// entries, blank line, next group — so a mouse click maps a row straight
+/// back to an insertable kind. Headers and blanks return `None`.
+pub(crate) fn kind_at_row(registry: &Registry, row: usize) -> Option<&'static str> {
+    let groups = grouped(registry);
+    let mut cursor = 0usize;
+    for group in [&groups.nodes, &groups.sources, &groups.sinks] {
+        // Header line.
+        if row == cursor {
+            return None;
+        }
+        cursor += 1;
+        // Entry lines.
+        if row < cursor + group.len() {
+            return Some(group[row - cursor]);
+        }
+        cursor += group.len();
+        // The blank separator line.
+        if row == cursor {
+            return None;
+        }
+        cursor += 1;
+    }
+    None
+}
+
 pub(crate) fn render(frame: &mut Frame, area: Rect, app: &App, focused: bool) {
-    let block = pane_block("Palette", focused);
+    let theme = app.theme;
+    let block = pane_block("Palette", focused, &theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let width = inner.width as usize;
     let groups = grouped(&app.registry);
     let mut lines = Vec::new();
-    // All three groups now show insert letters.
-    push_group(&mut lines, "NODES", &groups.nodes, width);
+    // All three groups now show insert letters. Row structure must stay in
+    // lockstep with `kind_at_row` above.
+    push_group(&mut lines, "NODES", &groups.nodes, width, &theme);
     lines.push(Line::raw(""));
-    push_group(&mut lines, "SOURCES", &groups.sources, width);
+    push_group(&mut lines, "SOURCES", &groups.sources, width, &theme);
     lines.push(Line::raw(""));
-    push_group(&mut lines, "SINKS", &groups.sinks, width);
+    push_group(&mut lines, "SINKS", &groups.sinks, width, &theme);
 
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn push_group(lines: &mut Vec<Line<'static>>, header: &str, kinds: &[&'static str], width: usize) {
+fn push_group(
+    lines: &mut Vec<Line<'static>>,
+    header: &str,
+    kinds: &[&'static str],
+    width: usize,
+    theme: &Theme,
+) {
     lines.push(Line::from(Span::styled(
         header.to_string(),
-        Style::new().fg(Color::Gray).add_modifier(Modifier::BOLD),
+        Style::new().fg(theme.text_dim).add_modifier(Modifier::BOLD),
     )));
     for &kind in kinds {
-        lines.push(entry_line(kind, insert_letter(kind), width));
+        lines.push(entry_line(kind, insert_letter(kind), width, theme));
     }
 }
 
 /// One catalog row: kind on the left, insert letter pushed to the right edge.
-fn entry_line(kind: &str, letter: Option<char>, width: usize) -> Line<'static> {
+fn entry_line(kind: &str, letter: Option<char>, width: usize, theme: &Theme) -> Line<'static> {
     let name = format!("  {kind}");
     match letter {
         Some(letter) => {
@@ -124,9 +160,32 @@ fn entry_line(kind: &str, letter: Option<char>, width: usize) -> Line<'static> {
             Line::from(vec![
                 Span::raw(name),
                 Span::raw(" ".repeat(pad)),
-                Span::styled(letter.to_string(), Style::new().fg(Color::Yellow)),
+                Span::styled(letter.to_string(), Style::new().fg(theme.warn)),
             ])
         }
         None => Line::from(name),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kind_at_row_mirrors_the_rendered_rows() {
+        let registry = Registry::with_builtins();
+        let groups = grouped(&registry);
+
+        // Row 0 is the NODES header; row 1 the first operator.
+        assert_eq!(kind_at_row(&registry, 0), None);
+        assert_eq!(kind_at_row(&registry, 1), Some(groups.nodes[0]));
+        // The row after the last operator is the blank separator, then the
+        // SOURCES header, then the first source.
+        let blank = 1 + groups.nodes.len();
+        assert_eq!(kind_at_row(&registry, blank), None);
+        assert_eq!(kind_at_row(&registry, blank + 1), None);
+        assert_eq!(kind_at_row(&registry, blank + 2), Some(groups.sources[0]));
+        // Far past the catalog: nothing.
+        assert_eq!(kind_at_row(&registry, 999), None);
     }
 }

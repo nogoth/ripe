@@ -4,12 +4,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ratatui::layout::Rect;
+
 use ripe_core::engine::NodeReport;
 use ripe_core::params::{FieldKind, ParamSchema};
 use ripe_core::preview::Preview;
 use ripe_core::{NodeId, Pipe, Registry};
 
+use crate::actions::Keymap;
 use crate::ui::layout::Layout;
+use crate::ui::theme::Theme;
 
 /// Which pane holds keyboard focus. `Tab` walks them in this order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +61,9 @@ pub enum Mode {
     /// lives in `App::edit_state`; keeping it separate lets `Mode` stay
     /// `Clone + PartialEq` without threading `TextArea`'s lifetime through.
     EditParams(NodeId),
+    /// The command palette is open: `query` fuzzy-filters the action catalog
+    /// and `selected` indexes into the filtered list.
+    Command { query: String, selected: usize },
 }
 
 // ---- param-edit overlay state -------------------------------------------
@@ -292,6 +299,20 @@ impl Default for PreviewState {
     }
 }
 
+/// Deepest the undo stack grows; the oldest snapshot falls off first. Pipes
+/// are small (nodes + edges + params, no item data), so 100 clones are cheap.
+pub const UNDO_CAP: usize = 100;
+
+/// The inner (border-excluded) screen rectangle of each pane, captured by the
+/// view every frame so `update` can hit-test mouse events without knowing
+/// layout math. Zero-sized before the first render.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PaneRects {
+    pub palette: Rect,
+    pub canvas: Rect,
+    pub preview: Rect,
+}
+
 /// The editor state. Owns the registry so the palette can group the real
 /// module list without threading it through the view.
 pub struct App {
@@ -310,6 +331,8 @@ pub struct App {
     pub selected: Option<NodeId>,
     /// Rows of canvas content scrolled off the top.
     pub scroll: u16,
+    /// Columns of canvas content scrolled off the left (wide pipes).
+    pub hscroll: u16,
     /// Per-node eval status drawn as the canvas status line.
     pub statuses: BTreeMap<NodeId, NodeReport>,
     /// Whether the help overlay is drawn over the layout.
@@ -329,6 +352,19 @@ pub struct App {
     /// Monotonic tick counter, advanced on every `Msg::Tick`; drives the
     /// canvas spinner animation for loading nodes.
     pub tick_count: u64,
+    /// Resolved keybindings: catalog defaults + config overrides (M14).
+    pub keymap: Keymap,
+    /// Active color theme (M14).
+    pub theme: Theme,
+    /// Undo history: pipe snapshots taken before each committed mutation.
+    pub undo: Vec<Pipe>,
+    /// Redo history: snapshots displaced by undo; cleared by any new edit.
+    pub redo: Vec<Pipe>,
+    /// Pane geometry from the last render, for mouse hit-testing.
+    pub rects: PaneRects,
+    /// A left-button press started on this node; releasing on another node
+    /// attempts a connection (mouse drag-to-connect).
+    pub drag_from: Option<NodeId>,
 }
 
 impl App {
@@ -355,6 +391,7 @@ impl App {
             focus: Pane::Palette,
             selected,
             scroll: 0,
+            hscroll: 0,
             statuses: BTreeMap::new(),
             show_help: false,
             should_quit: false,
@@ -364,6 +401,12 @@ impl App {
             eval: EvalState::default(),
             preview: PreviewState::default(),
             tick_count: 0,
+            keymap: Keymap::default(),
+            theme: Theme::default(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            rects: PaneRects::default(),
+            drag_from: None,
         }
     }
 

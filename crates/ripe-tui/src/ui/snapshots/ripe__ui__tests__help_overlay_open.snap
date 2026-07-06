@@ -1,6 +1,5 @@
 ---
 source: crates/ripe-tui/src/ui/mod.rs
-assertion_line: 354
 expression: "render_to_string(&mut app, 120, 40)"
 ---
  PIPES   EDIT  RUN  VIEW  HELP                               news_pipeline.pipe                               ● 3 nodes
@@ -11,29 +10,29 @@ expression: "render_to_string(&mut app, 120, 40)"
 ┃  regex            r┃│╚════════════════════════════╝                                 ││           the pipe.           │
 ┃  reverse          e┃│               ▼                                               ││                               │
 ┃  sort             s┃│╭────────────────────────────╮                                 ││                               │
-┃  tail             i┃││2  Filter                   │                                 ││                               │
-┃  transform        m┃││(no rules)                  │                                 ││                               │
-┃  union            u┃│╰────────────────────────────╯                                 ││                               │
-┃  unique           q┃│               ▼                                               ││                               │
-┃                    ┃│╭────────────────────────────╮                                 ││                               │
-┃SOURCES             ┃││3  Output                   │                                 ││                               │
-┃  fetch_csv        v┃││rss → stdout                │                                 ││                               │
-┃  fetch_feed       f┃│╰────────────────────────────╯                                 ││                               │
-┃  fetch_json       j┃│                 ╔Help══════════════════════════════════╗      ││                               │
-┃                    ┃│                 ║ Tab         cycle pane focus         ║      ││                               │
-┃SINKS               ┃│                 ║ ?           toggle this help         ║      ││                               │
-┃  output           o┃│                 ║ Esc         close help               ║      ││                               │
-┃                    ┃│                 ║ q / Ctrl-C  quit                     ║      ││                               │
-┃                    ┃│                 ║                                      ║      ││                               │
-┃                    ┃│                 ║                                      ║      ││                               │
-┃                    ┃│                 ╚══════════════════════════════════════╝      ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
-┃                    ┃│                                                               ││                               │
+┃  tail             i┃╔Help — keymap═════════════════════════════════════════════════════════════╗                     │
+┃  transform        m┃║ GLOBAL                               CANVAS                              ║                     │
+┃  union            u┃║ r           Run all                  a           Insert node             ║                     │
+┃  unique           q┃║ R           Run to selected          d           Delete node             ║                     │
+┃                    ┃║ u           Undo                     x           Delete edge             ║                     │
+┃SOURCES             ┃║ Ctrl-r      Redo                     c           Connect from selected   ║                     │
+┃  fetch_csv        v┃║ :           Command palette          Enter       Edit params             ║                     │
+┃  fetch_feed       f┃║ Ctrl-s      Save pipe                j           Select downstream       ║                     │
+┃  fetch_json       j┃║ Ctrl-o      Open pipe                k           Select upstream         ║                     │
+┃                    ┃║ Tab         Next pane                h           Select left branch      ║                     │
+┃SINKS               ┃║ ?           Toggle help              l           Select right branch     ║                     │
+┃  output           o┃║ q           Quit                     1-9         jump to node badge      ║                     │
+┃                    ┃║                                      a <letter>  insert palette kind     ║                     │
+┃                    ┃║ MODES                                                                    ║                     │
+┃                    ┃║ Esc         dismiss / cancel         PREVIEW                             ║                     │
+┃                    ┃║ Ctrl-c      quit immediately         [           Previous preview tab    ║                     │
+┃                    ┃║                                      ]           Next preview tab        ║                     │
+┃                    ┃║                                      a           Toggle auto-refresh     ║                     │
+┃                    ┃║                                      j           Scroll down             ║                     │
+┃                    ┃║                                      k           Scroll up               ║                     │
+┃                    ┃║                                      g           Scroll to top           ║                     │
+┃                    ┃║                                      G           Scroll to bottom        ║                     │
+┃                    ┃╚══════════════════════════════════════════════════════════════════════════╝                     │
 ┃                    ┃│                                                               ││                               │
 ┃                    ┃│                                                               ││                               │
 ┃                    ┃│                                                               ││                               │
@@ -42,4 +41,4 @@ expression: "render_to_string(&mut app, 120, 40)"
 ┃                    ┃│                                                               ││                               │
 ┃                    ┃│                                                               ││ Rendered 0 i…Auto refresh: on │
 ┗━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────────────────────────────────────┘└───────────────────────────────┘
- Mode: Normal                                                                         tab switch pane   ? help   q quit
+ Mode: Normal                                                             : palette   tab switch pane   ? help   q quit

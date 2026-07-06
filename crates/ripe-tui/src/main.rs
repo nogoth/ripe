@@ -4,7 +4,9 @@
 //! becomes `Msg` (`event`), `update` is the pure transition, and `ui` renders
 //! the model. `main` owns only the terminal lifecycle and the event loop.
 
+mod actions;
 mod app;
+mod config;
 mod event;
 mod ui;
 mod update;
@@ -16,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use crossterm::event::EventStream;
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture, EventStream};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -34,8 +36,10 @@ use ripe_core::format::Format;
 use ripe_core::preview::Preview;
 use ripe_core::{Bindings, EvalCtx, NodeStatus, Pipe, PortValue, Registry, load_pipe};
 
+use actions::Keymap;
 use app::{App, EvalRequest, EvalScope};
 use event::Msg;
+use ui::theme::Theme;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
@@ -72,9 +76,11 @@ async fn main() -> ExitCode {
 
 /// Build the initial model: open the pipe named on the command line, or start
 /// on an empty one. Load warnings go to the log (the editor surfaces them once
-/// the panels can); a hard load error aborts before the UI starts.
+/// the panels can); a hard load error aborts before the UI starts. User
+/// config (theme, key remaps) is applied last; a bad config never blocks
+/// startup — problems are logged and defaults kept.
 fn build_app(registry: Registry) -> anyhow::Result<App> {
-    match std::env::args_os().nth(1) {
+    let mut app = match std::env::args_os().nth(1) {
         Some(arg) => {
             let path = PathBuf::from(arg);
             let loaded = load_pipe(&path, &registry)
@@ -82,10 +88,24 @@ fn build_app(registry: Registry) -> anyhow::Result<App> {
             for warning in &loaded.warnings {
                 tracing::warn!(pipe = %path.display(), "{warning}");
             }
-            Ok(App::with_pipe(registry, loaded.pipe, path))
+            App::with_pipe(registry, loaded.pipe, path)
         }
-        None => Ok(App::new(registry)),
+        None => App::new(registry),
+    };
+
+    let config = config::load();
+    if let Some(name) = &config.theme {
+        match Theme::from_name(name) {
+            Some(theme) => app.theme = theme,
+            None => tracing::warn!("unknown theme `{name}` (expected dark or light)"),
+        }
     }
+    let (keymap, warnings) = Keymap::with_overrides(&config.keys);
+    for warning in &warnings {
+        tracing::warn!("{warning}");
+    }
+    app.keymap = keymap;
+    Ok(app)
 }
 
 /// Enter the alternate screen, run the loop, and restore the terminal no
@@ -252,7 +272,7 @@ fn init_terminal() -> anyhow::Result<Tui> {
     install_panic_hook();
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     Terminal::new(CrosstermBackend::new(stdout)).map_err(Into::into)
 }
 
@@ -260,7 +280,7 @@ fn init_terminal() -> anyhow::Result<Tui> {
 /// caller is already on the way out (clean exit or, via the hook, a panic).
 fn restore_terminal() {
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
 }
 
 /// Chain terminal restoration ahead of the default panic hook so a crash

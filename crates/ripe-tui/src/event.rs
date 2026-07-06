@@ -2,7 +2,9 @@
 //! never touches raw key codes. Keeping the mapping here means the keymap
 //! lives in one place and stays trivially testable.
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 
 use ripe_core::EvalReport;
 use ripe_core::preview::Preview;
@@ -72,6 +74,15 @@ pub enum Msg {
     /// Confirm the typed path.
     PromptConfirm,
 
+    // --- polish (M14) -----------------------------------------------------
+    /// Restore the pipe snapshot taken before the last mutation.
+    Undo,
+    /// Re-apply the last undone mutation.
+    Redo,
+    /// A mouse press, release, or wheel step. Hit-testing happens in `update`
+    /// against the pane rects the view recorded on the previous frame.
+    Mouse(MouseEvent),
+
     /// A key with no binding in the current context.
     Key(KeyEvent),
 }
@@ -82,6 +93,13 @@ pub enum Msg {
 pub fn from_event(event: Event) -> Option<Msg> {
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => Some(from_key(key)),
+        Event::Mouse(m) => match m.kind {
+            MouseEventKind::Down(MouseButton::Left)
+            | MouseEventKind::Up(MouseButton::Left)
+            | MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown => Some(Msg::Mouse(m)),
+            _ => None, // moves, drags-in-progress, other buttons
+        },
         _ => None,
     }
 }

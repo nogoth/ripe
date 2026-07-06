@@ -5,19 +5,21 @@
 
 use std::path::PathBuf;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Position;
 
 use ripe_core::params::{FieldKind, Params};
 use ripe_core::persist::{load_pipe, save_pipe};
 use ripe_core::preview::Preview;
-use ripe_core::{EvalReport, NodeStatus};
+use ripe_core::{EvalReport, NodeId, NodeStatus, Pipe};
 
+use crate::actions::{Action, Context, filtered_actions};
 use crate::app::{
     App, DEBOUNCE_TICKS, EditParamsState, EvalRequest, EvalScope, FieldEditor, Mode, Pane,
-    PathAction,
+    PathAction, UNDO_CAP,
 };
 use crate::event::Msg;
-use crate::ui::palette::insert_letter;
+use crate::ui::palette::{insert_letter, kind_at_row};
 
 /// Apply one message to the model. The only invariant callers rely on: a
 /// panicking `update` crashes the process (no silent data loss), but a
@@ -81,18 +83,29 @@ pub fn update(app: &mut App, msg: Msg) {
         }
         Msg::PromptConfirm => do_confirm_prompt(app),
 
+        Msg::Undo => do_undo(app),
+        Msg::Redo => do_redo(app),
+        Msg::Mouse(m) => on_mouse(app, m),
+
         Msg::Key(key) => on_key(app, key),
     }
 }
 
 // --- pane cycle (Tab) ----------------------------------------------------
 
-/// Tab cycles panes in Normal modes; in EditParams it moves field focus.
+/// Tab cycles panes in Normal modes; in EditParams it moves field focus; in
+/// the command palette it walks the filtered list (focus is meaningless under
+/// a modal overlay).
 fn on_next_pane(app: &mut App) {
-    if matches!(app.mode, Mode::EditParams(_)) {
-        shift_field_focus(app, true);
-    } else {
-        app.focus = app.focus.next();
+    match &mut app.mode {
+        Mode::EditParams(_) => shift_field_focus(app, true),
+        Mode::Command { query, selected } => {
+            let n = filtered_actions(query).len();
+            if n > 0 {
+                *selected = (*selected + 1) % n;
+            }
+        }
+        _ => app.focus = app.focus.next(),
     }
 }
 
@@ -141,42 +154,165 @@ fn on_key(app: &mut App, key: KeyEvent) {
             }
         }
         Mode::EditParams(_) => on_key_edit_params(app, key),
+        Mode::Command { .. } => on_key_command(app, key),
         Mode::Normal => {
-            // Run commands work from any pane, so they precede the canvas gate.
-            match key.code {
-                KeyCode::Char('r') => return update(app, Msg::RunAll),
-                KeyCode::Char('R') => return update(app, Msg::RunToSelected),
-                _ => {}
-            }
-            // The preview pane owns its own key set (tabs, scroll, refresh).
-            if app.focus == Pane::Preview {
-                on_key_preview(app, key);
+            // The keymap owns every Normal-mode binding: the focused pane's
+            // context is consulted first, then the global bindings — so `q`
+            // quits from any pane while `a` still means Insert only on the
+            // canvas and auto-refresh only in the preview.
+            let context = match app.focus {
+                Pane::Canvas => Some(Context::Canvas),
+                Pane::Preview => Some(Context::Preview),
+                Pane::Palette => None,
+            };
+            if let Some(action) = app.keymap.resolve(&key, context) {
+                dispatch_action(app, action);
                 return;
             }
-            if app.focus != Pane::Canvas {
-                return;
-            }
-            match key.code {
-                KeyCode::Char('j') | KeyCode::Down => update(app, Msg::StepFlow(true)),
-                KeyCode::Char('k') | KeyCode::Up => update(app, Msg::StepFlow(false)),
-                KeyCode::Char('h') => update(app, Msg::Lateral(false)),
-                KeyCode::Char('l') => update(app, Msg::Lateral(true)),
-                KeyCode::Char('a') => update(app, Msg::InsertPending),
-                KeyCode::Char('d') => update(app, Msg::DeleteNode),
-                KeyCode::Char('x') => update(app, Msg::DeleteEdge),
-                KeyCode::Char('c') => update(app, Msg::BeginConnect),
-                KeyCode::Char(ch @ '1'..='9') => {
-                    update(app, Msg::SelectBadge(ch as u64 - '0' as u64))
-                }
-                KeyCode::Char('q') => on_quit(app),
-                KeyCode::Enter => {
-                    if app.selected.is_some() {
-                        open_params_overlay(app);
-                    }
-                }
-                _ => {}
+            // Badge jumps are parameterized, so they stay outside the table.
+            if app.focus == Pane::Canvas
+                && let KeyCode::Char(ch @ '1'..='9') = key.code
+            {
+                update(app, Msg::SelectBadge(ch as u64 - '0' as u64));
             }
         }
+    }
+}
+
+/// Execute one catalog action. Pane-scoped actions first claim their pane so
+/// a command-palette dispatch behaves exactly like the key pressed with that
+/// pane focused; when the key genuinely was pressed there, this is a no-op.
+fn dispatch_action(app: &mut App, action: Action) {
+    match action {
+        Action::Quit => on_quit(app),
+        Action::Save => update(app, Msg::Save),
+        Action::Open => update(app, Msg::Open),
+        Action::RunAll => update(app, Msg::RunAll),
+        Action::RunToSelected => update(app, Msg::RunToSelected),
+        Action::Undo => update(app, Msg::Undo),
+        Action::Redo => update(app, Msg::Redo),
+        Action::Help => update(app, Msg::ToggleHelp),
+        Action::NextPane => update(app, Msg::NextPane),
+        Action::CommandPalette => {
+            app.mode = Mode::Command {
+                query: String::new(),
+                selected: 0,
+            };
+            app.status.clear();
+        }
+        Action::Insert => {
+            app.focus = Pane::Canvas;
+            update(app, Msg::InsertPending);
+        }
+        Action::DeleteNode => {
+            app.focus = Pane::Canvas;
+            update(app, Msg::DeleteNode);
+        }
+        Action::DeleteEdge => {
+            app.focus = Pane::Canvas;
+            update(app, Msg::DeleteEdge);
+        }
+        Action::Connect => {
+            app.focus = Pane::Canvas;
+            update(app, Msg::BeginConnect);
+        }
+        Action::EditParams => {
+            app.focus = Pane::Canvas;
+            if app.selected.is_some() {
+                open_params_overlay(app);
+            }
+        }
+        Action::StepNext => {
+            app.focus = Pane::Canvas;
+            update(app, Msg::StepFlow(true));
+        }
+        Action::StepPrev => {
+            app.focus = Pane::Canvas;
+            update(app, Msg::StepFlow(false));
+        }
+        Action::LateralLeft => {
+            app.focus = Pane::Canvas;
+            update(app, Msg::Lateral(false));
+        }
+        Action::LateralRight => {
+            app.focus = Pane::Canvas;
+            update(app, Msg::Lateral(true));
+        }
+        Action::PrevTab => {
+            app.focus = Pane::Preview;
+            app.preview.tab = app.preview.tab.prev();
+            app.preview.scroll = 0;
+        }
+        Action::NextTab => {
+            app.focus = Pane::Preview;
+            app.preview.tab = app.preview.tab.next();
+            app.preview.scroll = 0;
+        }
+        Action::ToggleAutoRefresh => {
+            app.focus = Pane::Preview;
+            app.preview.auto_refresh = !app.preview.auto_refresh;
+            app.status = if app.preview.auto_refresh {
+                "preview auto-refresh: on".to_string()
+            } else {
+                "preview auto-refresh: off (frozen)".to_string()
+            };
+        }
+        Action::ScrollDown => {
+            app.focus = Pane::Preview;
+            app.preview.scroll = app.preview.scroll.saturating_add(1);
+        }
+        Action::ScrollUp => {
+            app.focus = Pane::Preview;
+            app.preview.scroll = app.preview.scroll.saturating_sub(1);
+        }
+        Action::ScrollTop => {
+            app.focus = Pane::Preview;
+            app.preview.scroll = 0;
+        }
+        Action::ScrollBottom => {
+            app.focus = Pane::Preview;
+            // The view clamps an over-large offset to the last page.
+            app.preview.scroll = u16::MAX;
+        }
+    }
+}
+
+/// Key handler for the command palette: type to filter, Up/Down (or Tab) to
+/// move, Enter to run, Esc (as `Dismiss`) to close.
+fn on_key_command(app: &mut App, key: KeyEvent) {
+    let Mode::Command { query, selected } = &mut app.mode else {
+        return;
+    };
+    match key.code {
+        KeyCode::Char(ch) => {
+            query.push(ch);
+            *selected = 0;
+        }
+        KeyCode::Backspace => {
+            query.pop();
+            *selected = 0;
+        }
+        KeyCode::Down => {
+            let n = filtered_actions(query).len();
+            if n > 0 {
+                *selected = (*selected + 1) % n;
+            }
+        }
+        KeyCode::Up => {
+            let n = filtered_actions(query).len();
+            if n > 0 {
+                *selected = (*selected + n - 1) % n;
+            }
+        }
+        KeyCode::Enter => {
+            let picked = filtered_actions(query).get(*selected).map(|i| i.action);
+            app.mode = Mode::Normal;
+            match picked {
+                Some(action) => dispatch_action(app, action),
+                None => app.status = "no matching command".to_string(),
+            }
+        }
+        _ => {}
     }
 }
 
@@ -359,39 +495,122 @@ fn describe_failure(
     }
 }
 
-// --- preview panel keys (M13) --------------------------------------------
+// --- undo / redo (M14) -----------------------------------------------------
 
-/// Keys handled when the preview pane holds focus: `[`/`]` switch tab, `a`
-/// toggles auto-refresh, and j/k/g/G scroll the body.
-fn on_key_preview(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char('[') => {
-            app.preview.tab = app.preview.tab.prev();
-            app.preview.scroll = 0;
+/// Snapshot the pipe ahead of a mutation. Every committed graph edit calls
+/// this first; a new edit truncates the redo branch, vim-style.
+fn push_undo(app: &mut App) {
+    app.redo.clear();
+    if app.undo.len() == UNDO_CAP {
+        app.undo.remove(0);
+    }
+    app.undo.push(app.pipe.clone());
+}
+
+fn do_undo(app: &mut App) {
+    let Some(prev) = app.undo.pop() else {
+        app.status = "nothing to undo".to_string();
+        return;
+    };
+    app.redo.push(app.pipe.clone());
+    restore_snapshot(app, prev);
+    app.status = format!("undo ({} left)", app.undo.len());
+}
+
+fn do_redo(app: &mut App) {
+    let Some(next) = app.redo.pop() else {
+        app.status = "nothing to redo".to_string();
+        return;
+    };
+    app.undo.push(app.pipe.clone());
+    restore_snapshot(app, next);
+    app.status = format!("redo ({} left)", app.redo.len());
+}
+
+/// Swap a history snapshot in as the live pipe and reconcile everything that
+/// hangs off it. Dirty stays set even when the snapshot equals the last save —
+/// tracking save-equality isn't worth the bookkeeping.
+fn restore_snapshot(app: &mut App, pipe: Pipe) {
+    app.pipe = pipe;
+    if app.selected.is_none_or(|id| app.pipe.node(id).is_none()) {
+        app.selected = app.pipe.topo_order().ok().and_then(|o| o.first().copied());
+    }
+    app.statuses.retain(|id, _| app.pipe.node(*id).is_some());
+    app.dirty = true;
+    schedule_eval(app);
+}
+
+// --- mouse (M14) -----------------------------------------------------------
+
+/// Mouse input, Normal mode only (modal overlays stay keyboard-driven; a
+/// click with help open just closes help). Clicking a pane focuses it; on the
+/// canvas a click also selects the node under the cursor, and releasing that
+/// press over a *different* node attempts a connection (drag-to-connect).
+/// Clicking a palette row inserts that module. The wheel steps the canvas
+/// selection (auto-scroll follows it) and scrolls the preview body.
+fn on_mouse(app: &mut App, m: MouseEvent) {
+    if app.show_help {
+        if matches!(m.kind, MouseEventKind::Down(MouseButton::Left)) {
+            app.show_help = false;
         }
-        KeyCode::Char(']') => {
-            app.preview.tab = app.preview.tab.next();
-            app.preview.scroll = 0;
+        return;
+    }
+    if !matches!(app.mode, Mode::Normal) {
+        return;
+    }
+    let pos = Position::new(m.column, m.row);
+    let over_palette = app.rects.palette.contains(pos);
+    let over_canvas = app.rects.canvas.contains(pos);
+    let over_preview = app.rects.preview.contains(pos);
+
+    match m.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            if over_palette {
+                app.focus = Pane::Palette;
+                let row = (m.row - app.rects.palette.y) as usize;
+                if let Some(kind) = kind_at_row(&app.registry, row) {
+                    app.focus = Pane::Canvas;
+                    do_insert_kind(app, kind);
+                }
+            } else if over_canvas {
+                app.focus = Pane::Canvas;
+                if let Some(id) = canvas_hit(app, pos) {
+                    app.selected = Some(id);
+                    app.drag_from = Some(id);
+                }
+            } else if over_preview {
+                app.focus = Pane::Preview;
+            }
         }
-        KeyCode::Char('a') => {
-            app.preview.auto_refresh = !app.preview.auto_refresh;
-            app.status = if app.preview.auto_refresh {
-                "preview auto-refresh: on".to_string()
-            } else {
-                "preview auto-refresh: off (frozen)".to_string()
-            };
+        MouseEventKind::Up(MouseButton::Left) => {
+            if let Some(from) = app.drag_from.take()
+                && over_canvas
+                && let Some(to) = canvas_hit(app, pos)
+                && to != from
+            {
+                app.selected = Some(to);
+                try_connect(app, from, to);
+            }
         }
-        KeyCode::Char('j') | KeyCode::Down => {
-            app.preview.scroll = app.preview.scroll.saturating_add(1);
+        MouseEventKind::ScrollDown if over_canvas => update(app, Msg::StepFlow(true)),
+        MouseEventKind::ScrollUp if over_canvas => update(app, Msg::StepFlow(false)),
+        MouseEventKind::ScrollDown if over_preview => {
+            app.preview.scroll = app.preview.scroll.saturating_add(3);
         }
-        KeyCode::Char('k') | KeyCode::Up => {
-            app.preview.scroll = app.preview.scroll.saturating_sub(1);
+        MouseEventKind::ScrollUp if over_preview => {
+            app.preview.scroll = app.preview.scroll.saturating_sub(3);
         }
-        KeyCode::Char('g') | KeyCode::Home => app.preview.scroll = 0,
-        // The view clamps an over-large offset to the last page.
-        KeyCode::Char('G') | KeyCode::End => app.preview.scroll = u16::MAX,
         _ => {}
     }
+}
+
+/// The node under a screen position, mapped through the canvas rect, the
+/// current scroll offsets, and the same grid geometry the canvas painted with.
+fn canvas_hit(app: &App, pos: Position) -> Option<NodeId> {
+    let inner = app.rects.canvas;
+    let cx = (pos.x - inner.x) as usize + app.hscroll as usize;
+    let cy = (pos.y - inner.y) as usize + app.scroll as usize;
+    crate::ui::canvas::node_at(&app.pipe, inner.width, cx, cy)
 }
 
 // --- param-edit overlay --------------------------------------------------
@@ -603,6 +822,7 @@ fn do_apply_params(app: &mut App) {
     }
     let errors = candidate.validate(&app.registry);
     if errors.is_empty() {
+        push_undo(app);
         app.pipe = candidate;
         app.dirty = true;
         app.edit_state = None;
@@ -713,8 +933,11 @@ fn do_confirm_prompt(app: &mut App) {
                 app.preview.scroll = 0;
                 app.mode = Mode::Normal;
                 app.status = "loaded".to_string();
-                // A different graph entirely: drop the old memo cache, then
-                // evaluate the newcomer.
+                // A different graph entirely: history from the old pipe would
+                // "undo" into the wrong document, so drop it, along with the
+                // old memo cache; then evaluate the newcomer.
+                app.undo.clear();
+                app.redo.clear();
                 app.eval.reset_cache = true;
                 schedule_eval(app);
             }
@@ -738,8 +961,13 @@ fn do_insert(app: &mut App, ch: char) {
         app.status = format!("unknown insert letter '{ch}'");
         return;
     };
+    do_insert_kind(app, kind);
+}
 
-    // A letter must map to a registered kind; palette and this table are kept in
+/// Insert a node of `kind` (keyboard letter or palette click), splicing it
+/// after the selection when the types allow, else adding it unwired.
+fn do_insert_kind(app: &mut App, kind: &'static str) {
+    // A kind must be registered; palette rows and the letter table are kept in
     // sync by construction (both live in this crate).
     let module = app
         .registry
@@ -780,6 +1008,7 @@ fn do_insert(app: &mut App, ch: char) {
 
         let errors = candidate.validate(&app.registry);
         if errors.is_empty() {
+            push_undo(app);
             app.pipe = candidate;
             app.selected = Some(new_id);
             app.dirty = true;
@@ -792,6 +1021,7 @@ fn do_insert(app: &mut App, ch: char) {
     }
 
     // Unwired add (fallback or default when no outgoing edges).
+    push_undo(app);
     let new_id = app.pipe.add_node(kind, Params::new());
     app.selected = Some(new_id);
     app.dirty = true;
@@ -804,6 +1034,7 @@ fn do_delete_node(app: &mut App) {
     let Some(id) = app.selected else {
         return;
     };
+    push_undo(app);
     let neighbor = sensible_neighbor(&app.pipe, id);
     app.pipe.remove_node(id);
     // Neighbor might itself have been removed (e.g. a self-edge pipe, which
@@ -825,6 +1056,7 @@ fn do_delete_edge(app: &mut App) {
     // Clone the edge so we drop the iterator borrow before mutating.
     let maybe_edge = app.pipe.edges_into(id).next().cloned();
     if let Some(edge) = maybe_edge {
+        push_undo(app);
         let desc = format!("{} → {}", edge.from.node, edge.to.node);
         app.pipe
             .remove_edge(edge.from.node, &edge.from.port, edge.to.node, &edge.to.port);
@@ -885,12 +1117,19 @@ fn do_confirm_connect(app: &mut App) {
         app.mode = Mode::Normal;
         return;
     };
+    try_connect(app, from, to);
+    app.mode = Mode::Normal;
+}
 
+/// Wire `from` → `to` if the result validates; shared by the keyboard connect
+/// state machine and mouse drag-to-connect.
+fn try_connect(app: &mut App, from: NodeId, to: NodeId) {
     // Transactional: clone, attempt connect, validate, commit only if clean.
     let mut candidate = app.pipe.clone();
     candidate.connect(from, "out", to, "in");
     let errors = candidate.validate(&app.registry);
     if errors.is_empty() {
+        push_undo(app);
         app.pipe = candidate;
         app.dirty = true;
         app.status = format!("connected {from} → {to}");
@@ -898,7 +1137,6 @@ fn do_confirm_connect(app: &mut App) {
     } else {
         app.status = errors[0].clone();
     }
-    app.mode = Mode::Normal;
 }
 
 // --- helpers -------------------------------------------------------------
@@ -2401,5 +2639,305 @@ mod tests {
             3,
             "a superseded generation's preview is dropped"
         );
+    }
+
+    // --- M14 polish tests --------------------------------------------------
+
+    use crossterm::event::{MouseButton, MouseEventKind};
+    use ratatui::layout::Rect;
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> Msg {
+        Msg::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    }
+
+    /// Pane rects a 120x40 layout would produce, minus borders. Tests set
+    /// these directly instead of rendering.
+    fn set_rects(app: &mut App) {
+        app.rects.palette = Rect::new(1, 2, 20, 36);
+        app.rects.canvas = Rect::new(24, 2, 61, 36);
+        app.rects.preview = Rect::new(88, 2, 31, 36);
+    }
+
+    #[test]
+    fn q_quits_from_every_pane() {
+        for pane in [Pane::Palette, Pane::Canvas, Pane::Preview] {
+            let (mut app, _) = canvas_app();
+            app.focus = pane;
+            update(&mut app, key_msg(KeyCode::Char('q')));
+            assert!(app.should_quit, "q must quit with focus on {pane:?}");
+        }
+    }
+
+    #[test]
+    fn q_from_palette_still_respects_the_dirty_guard() {
+        let (mut app, _) = canvas_app();
+        app.focus = Pane::Palette;
+        app.dirty = true;
+        update(&mut app, key_msg(KeyCode::Char('q')));
+        assert!(!app.should_quit);
+        assert_eq!(app.mode, Mode::QuitGuard);
+        update(&mut app, key_msg(KeyCode::Char('q')));
+        assert!(app.should_quit, "second q confirms");
+    }
+
+    #[test]
+    fn undo_reverses_an_insert_and_redo_replays_it() {
+        let (mut app, _) = canvas_app();
+        assert_eq!(app.pipe.nodes.len(), 3);
+        update(&mut app, key_msg(KeyCode::Char('a')));
+        update(&mut app, key_msg(KeyCode::Char('s'))); // insert sort
+        assert_eq!(app.pipe.nodes.len(), 4);
+
+        update(&mut app, key_msg(KeyCode::Char('u')));
+        assert_eq!(app.pipe.nodes.len(), 3, "undo removes the insert");
+        assert!(app.eval.debounce.is_some(), "undo schedules a re-eval");
+
+        update(&mut app, Msg::Redo);
+        assert_eq!(app.pipe.nodes.len(), 4, "redo replays the insert");
+    }
+
+    #[test]
+    fn a_new_edit_truncates_the_redo_branch() {
+        let (mut app, _) = canvas_app();
+        update(&mut app, key_msg(KeyCode::Char('a')));
+        update(&mut app, key_msg(KeyCode::Char('s')));
+        update(&mut app, Msg::Undo);
+        assert_eq!(app.redo.len(), 1);
+        // A different edit while redo is pending.
+        update(&mut app, key_msg(KeyCode::Char('a')));
+        update(&mut app, key_msg(KeyCode::Char('l')));
+        assert!(app.redo.is_empty(), "new edit clears redo");
+        update(&mut app, Msg::Redo);
+        assert!(app.status.contains("nothing to redo"));
+    }
+
+    #[test]
+    fn undo_covers_delete_and_edge_removal_and_selection_survives() {
+        let (mut app, [a, b, _c]) = canvas_app();
+        app.selected = Some(b);
+        update(&mut app, key_msg(KeyCode::Char('d'))); // delete b
+        assert!(app.pipe.node(b).is_none());
+        update(&mut app, Msg::Undo);
+        assert!(app.pipe.node(b).is_some(), "deleted node restored");
+
+        app.selected = Some(b);
+        update(&mut app, key_msg(KeyCode::Char('x'))); // delete edge a->b
+        assert_eq!(app.pipe.edges_into(b).count(), 0);
+        update(&mut app, Msg::Undo);
+        assert_eq!(app.pipe.edges_into(b).count(), 1, "edge restored");
+        assert_eq!(app.selected, Some(b));
+        let _ = a;
+    }
+
+    #[test]
+    fn undo_stack_is_capped() {
+        let (mut app, _) = canvas_app();
+        for _ in 0..(UNDO_CAP + 20) {
+            update(&mut app, key_msg(KeyCode::Char('a')));
+            update(&mut app, key_msg(KeyCode::Char('l')));
+        }
+        assert_eq!(app.undo.len(), UNDO_CAP);
+    }
+
+    #[test]
+    fn undo_with_empty_history_is_a_polite_noop() {
+        let (mut app, _) = canvas_app();
+        update(&mut app, Msg::Undo);
+        assert!(app.status.contains("nothing to undo"));
+        assert_eq!(app.pipe.nodes.len(), 3);
+    }
+
+    #[test]
+    fn opening_a_pipe_clears_history() {
+        let (mut app, _) = canvas_app();
+        update(&mut app, key_msg(KeyCode::Char('a')));
+        update(&mut app, key_msg(KeyCode::Char('s')));
+        assert!(!app.undo.is_empty());
+
+        let tmp = std::env::temp_dir().join(format!("ripe-m14-open-{}.pipe", std::process::id()));
+        save_pipe(&app.pipe, &tmp).unwrap();
+        update(&mut app, Msg::Open);
+        for ch in tmp.to_string_lossy().chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+        update(&mut app, key_msg(KeyCode::Enter));
+        assert!(app.undo.is_empty(), "history from the old pipe is dropped");
+        assert!(app.redo.is_empty());
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn command_palette_opens_filters_and_dispatches() {
+        let (mut app, _) = canvas_app();
+        update(&mut app, key_msg(KeyCode::Char(':')));
+        assert!(matches!(app.mode, Mode::Command { .. }));
+
+        // Type "run" and execute the top hit (Run all).
+        for ch in "run".chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+        update(&mut app, key_msg(KeyCode::Enter));
+        assert_eq!(app.mode, Mode::Normal, "palette closes on Enter");
+        assert_eq!(app.eval.generation, 1, "Run all dispatched");
+    }
+
+    #[test]
+    fn command_palette_dispatch_claims_the_action_pane() {
+        let (mut app, [_a, b, _c]) = canvas_app();
+        app.focus = Pane::Palette; // action must not depend on prior focus
+        app.selected = Some(b);
+        update(&mut app, key_msg(KeyCode::Char(':')));
+        for ch in "delete node".chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+        update(&mut app, key_msg(KeyCode::Enter));
+        assert!(app.pipe.node(b).is_none(), "Delete node ran from palette");
+        assert_eq!(app.focus, Pane::Canvas, "canvas action claimed focus");
+    }
+
+    #[test]
+    fn command_palette_esc_closes_without_running() {
+        let (mut app, _) = canvas_app();
+        update(&mut app, key_msg(KeyCode::Char(':')));
+        update(&mut app, Msg::Dismiss);
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.eval.generation, 0, "nothing dispatched");
+    }
+
+    #[test]
+    fn remapped_key_resolves_and_default_stops_working() {
+        let (mut app, _) = canvas_app();
+        let mut overrides = std::collections::BTreeMap::new();
+        overrides.insert("run_all".to_string(), "e".to_string());
+        let (keymap, _) = crate::actions::Keymap::with_overrides(&overrides);
+        app.keymap = keymap;
+
+        update(&mut app, key_msg(KeyCode::Char('e')));
+        assert_eq!(app.eval.generation, 1, "remapped key runs");
+        update(&mut app, key_msg(KeyCode::Char('r')));
+        assert_eq!(app.eval.generation, 1, "old key is unbound");
+    }
+
+    #[test]
+    fn mouse_click_selects_a_canvas_node_and_focuses_panes() {
+        let (mut app, [a, b, _c]) = canvas_app();
+        set_rects(&mut app);
+        app.selected = Some(a);
+        app.focus = Pane::Palette;
+
+        // Node b sits at content rows 5..=8, col 0 (BOX_H 4 + V_GAP 1).
+        let (x, y) = (app.rects.canvas.x + 2, app.rects.canvas.y + 6);
+        update(
+            &mut app,
+            mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+        );
+        assert_eq!(app.focus, Pane::Canvas);
+        assert_eq!(app.selected, Some(b));
+
+        // A click in the preview pane focuses it without touching selection.
+        let (px, py) = (app.rects.preview.x + 1, app.rects.preview.y + 1);
+        update(
+            &mut app,
+            mouse(MouseEventKind::Down(MouseButton::Left), px, py),
+        );
+        assert_eq!(app.focus, Pane::Preview);
+        assert_eq!(app.selected, Some(b));
+    }
+
+    #[test]
+    fn mouse_drag_between_nodes_connects_them() {
+        // Two unwired, type-compatible nodes.
+        let mut pipe = Pipe::new("drag");
+        let src = pipe.add_node("fetch_feed", Params::new().with("url", "https://x"));
+        let dst = pipe.add_node("output", Params::new());
+        let mut app = App::with_pipe(Registry::with_builtins(), pipe, "drag.pipe".into());
+        app.focus = Pane::Canvas;
+        set_rects(&mut app);
+
+        // Both are sources of their rows: src row 0, dst row 0? No — dst has
+        // no inputs wired, so both sit in layer 0, columns 0 and 1.
+        let box_w = 29; // box_width(61) = (61 - 3) / 2 = 29
+        let (x0, y0) = (app.rects.canvas.x + 1, app.rects.canvas.y + 1);
+        let x1 = app.rects.canvas.x + box_w as u16 + 3 + 1; // second column
+        update(
+            &mut app,
+            mouse(MouseEventKind::Down(MouseButton::Left), x0, y0),
+        );
+        assert_eq!(app.selected, Some(src));
+        assert_eq!(app.drag_from, Some(src));
+        update(
+            &mut app,
+            mouse(MouseEventKind::Up(MouseButton::Left), x1, y0),
+        );
+        assert_eq!(
+            app.pipe.edges_into(dst).count(),
+            1,
+            "drag created the edge (status: {})",
+            app.status
+        );
+        assert!(app.drag_from.is_none());
+        // And it is undoable like any other mutation.
+        update(&mut app, Msg::Undo);
+        assert_eq!(app.pipe.edges_into(dst).count(), 0);
+    }
+
+    #[test]
+    fn mouse_click_on_a_palette_row_inserts_that_kind() {
+        let (mut app, _) = canvas_app();
+        set_rects(&mut app);
+        // Row 0 is the NODES header; row 1 is the first operator (filter).
+        let (x, y) = (app.rects.palette.x + 2, app.rects.palette.y + 1);
+        update(
+            &mut app,
+            mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+        );
+        assert_eq!(app.pipe.nodes.len(), 4, "palette click inserted a node");
+        assert_eq!(app.focus, Pane::Canvas);
+        assert!(app.dirty);
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_preview_and_steps_canvas_selection() {
+        let (mut app, [a, b, _c]) = canvas_app();
+        set_rects(&mut app);
+        app.selected = Some(a);
+        app.preview.scroll = 10;
+
+        let (px, py) = (app.rects.preview.x + 1, app.rects.preview.y + 1);
+        update(&mut app, mouse(MouseEventKind::ScrollUp, px, py));
+        assert_eq!(app.preview.scroll, 7, "wheel scrolls the preview by 3");
+
+        let (cx, cy) = (app.rects.canvas.x + 1, app.rects.canvas.y + 1);
+        update(&mut app, mouse(MouseEventKind::ScrollDown, cx, cy));
+        assert_eq!(app.selected, Some(b), "wheel steps the canvas selection");
+    }
+
+    #[test]
+    fn mouse_is_inert_in_modal_modes_and_closes_help() {
+        let (mut app, [a, b, _c]) = canvas_app();
+        set_rects(&mut app);
+        app.selected = Some(a);
+
+        app.show_help = true;
+        let (x, y) = (app.rects.canvas.x + 2, app.rects.canvas.y + 6);
+        update(
+            &mut app,
+            mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+        );
+        assert!(!app.show_help, "click closes help");
+        assert_eq!(app.selected, Some(a), "…without selecting through it");
+
+        app.mode = Mode::InsertPending;
+        update(
+            &mut app,
+            mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+        );
+        assert_eq!(app.selected, Some(a), "modal modes ignore the mouse");
+        let _ = b;
     }
 }

@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -29,6 +29,7 @@ use ripe_core::{NodeId, Params, Pipe};
 use crate::app::App;
 use crate::ui::layout::{Layout, Slot};
 use crate::ui::pane_block;
+use crate::ui::theme::Theme;
 
 // --- grid geometry -------------------------------------------------------
 
@@ -50,7 +51,8 @@ const LEFT: u8 = 4;
 const RIGHT: u8 = 8;
 
 pub(crate) fn render(frame: &mut Frame, area: Rect, app: &mut App, focused: bool) {
-    let block = pane_block("Canvas", focused);
+    let theme = app.theme;
+    let block = pane_block("Canvas", focused, &theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -59,7 +61,7 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &mut App, focused: bool
     if app.pipe.nodes.is_empty() {
         let hint = Paragraph::new(Line::from(Span::styled(
             "empty pipe — press a to add a node",
-            Style::new().fg(Color::DarkGray),
+            Style::new().fg(theme.text_faint),
         )))
         .alignment(Alignment::Center);
         frame.render_widget(hint, inner);
@@ -69,20 +71,24 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &mut App, focused: bool
     let layout = Layout::compute(&app.pipe);
     let box_w = box_width(inner.width);
     let content_h = content_height(&layout);
+    let content_w = content_width(&layout, box_w);
 
-    // Auto-scroll so the selected node stays on screen. Rendering owns this
-    // (rather than `update`) because it is the only place that knows the pane
-    // height; `update` just moves the selection.
+    // Auto-scroll (both axes) so the selected node stays on screen. Rendering
+    // owns this (rather than `update`) because it is the only place that
+    // knows the pane size; `update` just moves the selection.
     app.scroll = reveal(app, &layout, inner.height as usize, content_h) as u16;
+    app.hscroll = reveal_h(app, &layout, box_w, inner.width as usize, content_w) as u16;
     let scroll = app.scroll as usize;
+    let hscroll = app.hscroll as usize;
 
     let mut painter = Painter {
         buf: frame.buffer_mut(),
         inner,
         scroll,
+        hscroll,
     };
 
-    draw_wires(&mut painter, &layout, &app.pipe, box_w);
+    draw_wires(&mut painter, &layout, &app.pipe, box_w, &theme);
     let spinner = spinner_frame(app.tick_count);
     for (id, slot) in layout.iter() {
         let node = app.pipe.node(id).expect("layout ids come from the pipe");
@@ -97,16 +103,38 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &mut App, focused: bool
             app.eval.loading.contains(&id),
             spinner,
             app.selected == Some(id),
+            &theme,
         );
     }
 
     let viewport = inner.height as usize;
     if scroll > 0 {
-        edge_hint(&mut painter, "↑ more", true);
+        edge_hint(&mut painter, "↑ more", Edge::Top, &theme);
     }
     if scroll + viewport < content_h {
-        edge_hint(&mut painter, "↓ more", false);
+        edge_hint(&mut painter, "↓ more", Edge::Bottom, &theme);
     }
+    if hscroll > 0 {
+        edge_hint(&mut painter, "← more", Edge::Left, &theme);
+    }
+    if hscroll + (inner.width as usize) < content_w {
+        edge_hint(&mut painter, "→ more", Edge::Right, &theme);
+    }
+}
+
+/// The node whose box covers content cell `(cx, cy)`, using the same grid
+/// the canvas painted with — this is the mouse hit-test.
+pub(crate) fn node_at(pipe: &Pipe, inner_w: u16, cx: usize, cy: usize) -> Option<NodeId> {
+    let layout = Layout::compute(pipe);
+    let box_w = box_width(inner_w) as usize;
+    layout
+        .iter()
+        .find(|(_, slot)| {
+            let x0 = col_x0(slot.col, box_w as u16) as usize;
+            let top = box_top(slot.row);
+            (x0..x0 + box_w).contains(&cx) && (top..=box_bottom(slot.row)).contains(&cy)
+        })
+        .map(|(id, _)| id)
 }
 
 /// Total height of the laid-out content in cells.
@@ -115,6 +143,16 @@ fn content_height(layout: &Layout) -> usize {
         0 => 0,
         n => n * BOX_H as usize + (n - 1) * V_GAP as usize,
     }
+}
+
+/// Total width of the laid-out content in cells (right edge of the rightmost
+/// box in any row).
+fn content_width(layout: &Layout, box_w: u16) -> usize {
+    layout
+        .iter()
+        .map(|(_, slot)| col_x0(slot.col, box_w) as usize + box_w as usize)
+        .max()
+        .unwrap_or(0)
 }
 
 /// Box width sized so two branches sit side by side in the pane (PLAN.md).
@@ -163,27 +201,51 @@ fn reveal(app: &App, layout: &Layout, viewport: usize, content_h: usize) -> usiz
     scroll
 }
 
+/// The horizontal counterpart of [`reveal`]: keep the selected node's column
+/// in view when a wide pipe (3+ parallel branches) overflows the pane.
+fn reveal_h(app: &App, layout: &Layout, box_w: u16, viewport: usize, content_w: usize) -> usize {
+    if content_w <= viewport {
+        return 0;
+    }
+    let max = content_w - viewport;
+    let mut hscroll = (app.hscroll as usize).min(max);
+    if let Some(slot) = app.selected.and_then(|id| layout.slot(id)) {
+        let left = col_x0(slot.col, box_w) as usize;
+        let right = left + box_w as usize;
+        if left < hscroll {
+            hscroll = left;
+        }
+        if right > hscroll + viewport {
+            hscroll = right - viewport;
+        }
+        hscroll = hscroll.min(max);
+    }
+    hscroll
+}
+
 // --- painting ------------------------------------------------------------
 
 /// A clipped, scrolled writer over the frame buffer. All coordinates are in
-/// content space (x relative to the pane's left edge, y before scrolling);
-/// `put` maps them to the screen and drops anything off-pane.
+/// content space (x and y before scrolling); `put` maps them to the screen
+/// and drops anything off-pane.
 struct Painter<'a> {
     buf: &'a mut Buffer,
     inner: Rect,
     scroll: usize,
+    hscroll: usize,
 }
 
 impl Painter<'_> {
     fn put(&mut self, cx: u16, cy: usize, ch: char, style: Style) {
-        if cy < self.scroll || cx >= self.inner.width {
+        if cy < self.scroll || (cx as usize) < self.hscroll {
             return;
         }
         let dy = cy - self.scroll;
-        if dy >= self.inner.height as usize {
+        let dx = cx as usize - self.hscroll;
+        if dy >= self.inner.height as usize || dx >= self.inner.width as usize {
             return;
         }
-        let x = self.inner.x + cx;
+        let x = self.inner.x + dx as u16;
         let y = self.inner.y + dy as u16;
         let mut tmp = [0u8; 4];
         let cell = &mut self.buf[(x, y)];
@@ -205,7 +267,7 @@ fn wire(mask: &mut HashMap<(u16, usize), u8>, x: u16, y: usize, bits: u8) {
     *mask.entry((x, y)).or_default() |= bits;
 }
 
-fn draw_wires(p: &mut Painter, layout: &Layout, pipe: &Pipe, box_w: u16) {
+fn draw_wires(p: &mut Painter, layout: &Layout, pipe: &Pipe, box_w: u16, theme: &Theme) {
     let mut mask: HashMap<(u16, usize), u8> = HashMap::new();
     let mut arrows: HashSet<(u16, usize)> = HashSet::new();
 
@@ -262,8 +324,8 @@ fn draw_wires(p: &mut Painter, layout: &Layout, pipe: &Pipe, box_w: u16) {
         arrows.insert((t_cx, bus_y));
     }
 
-    let line = Style::new().fg(Color::DarkGray);
-    let head = Style::new().fg(Color::Gray);
+    let line = Style::new().fg(theme.border_dim);
+    let head = Style::new().fg(theme.text_dim);
     for (&(x, y), &m) in &mask {
         // An arrowhead only where a wire drops straight in; a junction entry
         // keeps its glyph so the merge stays legible.
@@ -307,6 +369,7 @@ fn draw_box(
     loading: bool,
     spinner: char,
     selected: bool,
+    theme: &Theme,
 ) {
     let x0 = col_x0(slot.col, box_w);
     let top = box_top(slot.row);
@@ -327,7 +390,7 @@ fn draw_box(
             '╝',
             '═',
             '║',
-            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
         )
     } else {
         (
@@ -337,7 +400,7 @@ fn draw_box(
             '╯',
             '─',
             '│',
-            Style::new().fg(kind_color(kind)),
+            Style::new().fg(theme.kind_color(kind)),
         )
     };
 
@@ -360,9 +423,9 @@ fn draw_box(
     // Row 1: numbered badge + kind title.
     let title_style = Style::new()
         .fg(if selected {
-            Color::Cyan
+            theme.accent
         } else {
-            kind_color(kind)
+            theme.kind_color(kind)
         })
         .add_modifier(Modifier::BOLD);
     let title = truncate(&format!("{}  {}", id.0, kind_title(kind)), inner_w);
@@ -372,9 +435,9 @@ fn draw_box(
     // is currently (re-)evaluating shows a spinner in place of its last status.
     let detail = param_summary(kind, params);
     let status_cell: Option<(String, Style)> = if loading {
-        Some((format!("{spinner} …"), Style::new().fg(Color::Yellow)))
+        Some((format!("{spinner} …"), Style::new().fg(theme.warn)))
     } else {
-        status_summary(report).map(|s| (s, status_style(report)))
+        status_summary(report).map(|s| (s, status_style(report, theme)))
     };
     match status_cell {
         Some((status, style)) => {
@@ -384,7 +447,7 @@ fn draw_box(
                 inner_x,
                 top + 2,
                 &truncate(&detail, detail_w),
-                Style::new().fg(Color::Gray),
+                Style::new().fg(theme.text_dim),
             );
             let sx = inner_x + (inner_w - status_w) as u16;
             p.put_str(sx, top + 2, &status, style);
@@ -393,7 +456,7 @@ fn draw_box(
             inner_x,
             top + 2,
             &truncate(&detail, inner_w),
-            Style::new().fg(Color::Gray),
+            Style::new().fg(theme.text_dim),
         ),
     }
 }
@@ -406,18 +469,37 @@ pub(crate) fn spinner_frame(tick: u64) -> char {
     FRAMES[(tick as usize) % FRAMES.len()]
 }
 
-/// Draw a `↑ more` / `↓ more` hint on the pane's top or bottom edge.
-fn edge_hint(p: &mut Painter, text: &str, top: bool) {
-    let w = text.chars().count() as u16;
-    let cx = (p.inner.width.saturating_sub(w)) / 2;
-    // Anchor to a screen edge regardless of scroll by targeting the content
-    // row that currently maps to the first/last visible line.
-    let cy = if top {
-        p.scroll
-    } else {
-        p.scroll + p.inner.height as usize - 1
+/// A pane edge a `more` hint can anchor to.
+enum Edge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+/// Draw a `↑/↓/←/→ more` hint on a pane edge. Anchoring to a screen edge
+/// regardless of scroll means targeting the content cell that currently maps
+/// to that edge's first/last visible line or column.
+fn edge_hint(p: &mut Painter, text: &str, edge: Edge, theme: &Theme) {
+    let w = text.chars().count();
+    let (cx, cy) = match edge {
+        Edge::Top | Edge::Bottom => {
+            let cx = p.hscroll + (p.inner.width as usize).saturating_sub(w) / 2;
+            let cy = match edge {
+                Edge::Top => p.scroll,
+                _ => p.scroll + p.inner.height as usize - 1,
+            };
+            (cx, cy)
+        }
+        Edge::Left | Edge::Right => {
+            let cx = match edge {
+                Edge::Left => p.hscroll,
+                _ => p.hscroll + (p.inner.width as usize).saturating_sub(w),
+            };
+            (cx, p.scroll + p.inner.height as usize / 2)
+        }
     };
-    p.put_str(cx, cy, text, Style::new().fg(Color::Yellow));
+    p.put_str(cx as u16, cy, text, Style::new().fg(theme.warn));
 }
 
 // --- per-node text -------------------------------------------------------
@@ -491,11 +573,11 @@ fn status_summary(report: Option<&NodeReport>) -> Option<String> {
     })
 }
 
-fn status_style(report: Option<&NodeReport>) -> Style {
+fn status_style(report: Option<&NodeReport>, theme: &Theme) -> Style {
     match report.map(|r| &r.status) {
-        Some(NodeStatus::Ok | NodeStatus::Cached) => Style::new().fg(Color::Green),
-        Some(NodeStatus::Err) => Style::new().fg(Color::Red),
-        Some(NodeStatus::Unready) => Style::new().fg(Color::DarkGray),
+        Some(NodeStatus::Ok | NodeStatus::Cached) => Style::new().fg(theme.ok),
+        Some(NodeStatus::Err) => Style::new().fg(theme.err),
+        Some(NodeStatus::Unready) => Style::new().fg(theme.text_faint),
         None => Style::new(),
     }
 }
@@ -516,16 +598,6 @@ fn kind_title(kind: &str) -> &str {
         "regex" => "Regex",
         "output" => "Output",
         other => other,
-    }
-}
-
-fn kind_color(kind: &str) -> Color {
-    match kind {
-        "fetch_feed" | "fetch_json" | "fetch_csv" | "output" => Color::Blue,
-        "regex" | "sort" => Color::Yellow,
-        "filter" | "transform" | "union" | "unique" => Color::Magenta,
-        "limit" | "tail" | "reverse" => Color::Green,
-        _ => Color::Gray,
     }
 }
 
@@ -615,6 +687,26 @@ mod tests {
         let b = spinner_frame(1);
         assert_ne!(a, b, "consecutive ticks show different frames");
         assert_eq!(spinner_frame(0), spinner_frame(8), "8 frames, then wrap");
+    }
+
+    #[test]
+    fn node_at_maps_content_cells_to_boxes() {
+        // a -> b vertically, in one column.
+        let mut pipe = Pipe::new("hit");
+        let a = pipe.add_node("fetch_feed", Params::new());
+        let b = pipe.add_node("filter", Params::new());
+        pipe.connect(a, "out", b, "in");
+
+        let inner_w = 61u16; // box_width = (61 - 3) / 2 = 29
+        // Inside a's box (rows 0..=3).
+        assert_eq!(node_at(&pipe, inner_w, 0, 0), Some(a));
+        assert_eq!(node_at(&pipe, inner_w, 28, 3), Some(a));
+        // The wire band row between the boxes hits nothing.
+        assert_eq!(node_at(&pipe, inner_w, 5, 4), None);
+        // Inside b's box (rows 5..=8).
+        assert_eq!(node_at(&pipe, inner_w, 5, 6), Some(b));
+        // Right of the single column: nothing.
+        assert_eq!(node_at(&pipe, inner_w, 40, 1), None);
     }
 
     #[test]

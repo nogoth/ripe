@@ -6,19 +6,22 @@
 //! Below a usable floor the layout would corrupt, so a size guard swaps in a
 //! plain notice instead.
 
-mod canvas;
+pub(crate) mod canvas;
 pub(crate) mod layout;
 pub(crate) mod palette;
 mod params;
 mod preview;
+pub(crate) mod theme;
 
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::layout::{Alignment, Constraint, Layout, Margin, Rect};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 
+use crate::actions::{self, Action, Context};
 use crate::app::{App, Mode, Pane, PathAction};
+use crate::ui::theme::Theme;
 
 /// Smallest terminal we lay the full editor out in. Under this we draw a
 /// notice rather than a mangled frame.
@@ -51,6 +54,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Constraint::Fill(1),
     ])
     .split(rows[1]);
+    // Record inner (border-excluded) pane rects for mouse hit-testing in
+    // `update`; this must track the geometry the pane renderers use.
+    app.rects.palette = cols[0].inner(Margin::new(1, 1));
+    app.rects.canvas = cols[1].inner(Margin::new(1, 1));
+    app.rects.preview = cols[2].inner(Margin::new(1, 1));
+
     let focus = app.focus;
     palette::render(frame, cols[0], app, focus == Pane::Palette);
     canvas::render(frame, cols[1], app, focus == Pane::Canvas);
@@ -59,25 +68,28 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     status_line(frame, rows[2], app);
 
     if app.show_help {
-        help_overlay(frame, area);
+        help_overlay(frame, area, app);
     }
 
-    // The param-edit overlay is drawn last so it sits on top of everything.
+    // Modal overlays are drawn last so they sit on top of everything.
     if matches!(app.mode, Mode::EditParams(_)) {
         params::render(frame, area, app);
+    }
+    if let Mode::Command { query, selected } = &app.mode {
+        command_overlay(frame, area, app, query, *selected);
     }
 }
 
 /// A bordered pane title block, drawn thick and bright when focused so the
 /// active pane reads at a glance.
-pub(crate) fn pane_block(title: &str, focused: bool) -> Block<'static> {
+pub(crate) fn pane_block(title: &str, focused: bool, theme: &Theme) -> Block<'static> {
     let (border_type, style) = if focused {
         (
             BorderType::Thick,
-            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
         )
     } else {
-        (BorderType::Plain, Style::new().fg(Color::DarkGray))
+        (BorderType::Plain, Style::new().fg(theme.border_dim))
     };
     Block::bordered()
         .border_type(border_type)
@@ -90,8 +102,8 @@ fn top_bar(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(
             " PIPES ",
             Style::new()
-                .bg(Color::Blue)
-                .fg(Color::White)
+                .bg(app.theme.menu_bg)
+                .fg(app.theme.menu_fg)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  EDIT  RUN  VIEW  HELP"),
@@ -122,6 +134,7 @@ fn top_bar(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn status_line(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = app.theme;
     // Path prompt: the whole status line becomes a single-line text input.
     if let Mode::PromptPath { action, buf } = &app.mode {
         let label = match action {
@@ -130,7 +143,7 @@ fn status_line(frame: &mut Frame, area: Rect, app: &App) {
         };
         let text = format!(" {label}{buf}█");
         frame.render_widget(
-            Paragraph::new(text).style(Style::new().fg(Color::White)),
+            Paragraph::new(text).style(Style::new().fg(theme.text)),
             area,
         );
         return;
@@ -139,11 +152,12 @@ fn status_line(frame: &mut Frame, area: Rect, app: &App) {
     // Normal / other modes: left side shows the mode tag and status message,
     // right side shows contextual key hints.
     let (mode_label, mode_color) = match &app.mode {
-        Mode::Normal => ("Normal", Color::Green),
-        Mode::InsertPending => ("Insert", Color::Yellow),
-        Mode::Connecting { .. } => ("Connect", Color::Cyan),
-        Mode::QuitGuard => ("Quit?", Color::Red),
-        Mode::EditParams(_) => ("Params", Color::Magenta),
+        Mode::Normal => ("Normal", theme.ok),
+        Mode::InsertPending => ("Insert", theme.warn),
+        Mode::Connecting { .. } => ("Connect", theme.accent),
+        Mode::QuitGuard => ("Quit?", theme.err),
+        Mode::EditParams(_) => ("Params", theme.modal),
+        Mode::Command { .. } => ("Command", theme.modal),
         Mode::PromptPath { .. } => unreachable!(),
     };
 
@@ -157,15 +171,7 @@ fn status_line(frame: &mut Frame, area: Rect, app: &App) {
         Span::raw(app.status.clone()),
     ]);
 
-    let keys = if matches!(app.mode, Mode::EditParams(_)) {
-        "Ctrl-s apply   Esc cancel   ↑/↓ field "
-    } else if app.focus == Pane::Canvas {
-        "a insert   d del   c connect   r run   j/k move   tab pane   ? help   q quit "
-    } else if app.focus == Pane::Preview {
-        "[ ] tab   a auto-refresh   j/k scroll   r run   tab pane   ? help "
-    } else {
-        "tab switch pane   ? help   q quit "
-    };
+    let keys = hint_line(app);
     let hints = Line::from(keys).alignment(Alignment::Right);
 
     let chunks = Layout::horizontal([Constraint::Min(0), Constraint::Length(hints.width() as u16)])
@@ -174,30 +180,145 @@ fn status_line(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(hints), chunks[1]);
 }
 
-fn help_overlay(frame: &mut Frame, area: Rect) {
-    let rect = centered_rect(40, 8, area);
+/// Contextual key hints, generated from the live keymap so a remapped key
+/// never leaves the status line lying about it.
+fn hint_line(app: &App) -> String {
+    let k = |a: Action| app.keymap.label(a);
+    if matches!(app.mode, Mode::EditParams(_)) {
+        return "Ctrl-s apply   Esc cancel   ↑/↓ field ".to_string();
+    }
+    if matches!(app.mode, Mode::Command { .. }) {
+        return "type to filter   ↑/↓ select   Enter run   Esc close ".to_string();
+    }
+    match app.focus {
+        Pane::Canvas => format!(
+            "{} insert   {} del   {} connect   {} run   {}/{} move   tab pane   ? help   {} quit ",
+            k(Action::Insert),
+            k(Action::DeleteNode),
+            k(Action::Connect),
+            k(Action::RunAll),
+            k(Action::StepNext),
+            k(Action::StepPrev),
+            k(Action::Quit),
+        ),
+        Pane::Preview => format!(
+            "{} {} tab   {} auto-refresh   {}/{} scroll   {} run   tab pane   ? help ",
+            k(Action::PrevTab),
+            k(Action::NextTab),
+            k(Action::ToggleAutoRefresh),
+            k(Action::ScrollDown),
+            k(Action::ScrollUp),
+            k(Action::RunAll),
+        ),
+        Pane::Palette => format!(
+            "{} palette   tab switch pane   ? help   {} quit ",
+            k(Action::CommandPalette),
+            k(Action::Quit),
+        ),
+    }
+}
+
+/// The keymap reference, generated from the action catalog: GLOBAL bindings
+/// in the left column, CANVAS and PREVIEW in the right, plus the modal keys
+/// that live outside the catalog. Labels come from the live keymap, so
+/// config remaps show up here automatically.
+fn help_overlay(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = app.theme;
+    let catalog_rows = |ctx: Context| -> Vec<Line<'static>> {
+        let mut lines = vec![Line::from(Span::styled(
+            format!(" {}", ctx.heading()),
+            Style::new().fg(theme.text_dim).add_modifier(Modifier::BOLD),
+        ))];
+        for info in actions::CATALOG.iter().filter(|i| i.context == ctx) {
+            lines.push(help_line(&app.keymap.label(info.action), info.name, &theme));
+        }
+        lines
+    };
+
+    let mut left = catalog_rows(Context::Global);
+    left.push(Line::raw(""));
+    left.push(Line::from(Span::styled(
+        " MODES",
+        Style::new().fg(theme.text_dim).add_modifier(Modifier::BOLD),
+    )));
+    left.push(help_line("Esc", "dismiss / cancel", &theme));
+    left.push(help_line("Ctrl-c", "quit immediately", &theme));
+
+    let mut right = catalog_rows(Context::Canvas);
+    right.push(help_line("1-9", "jump to node badge", &theme));
+    right.push(help_line("a <letter>", "insert palette kind", &theme));
+    right.push(Line::raw(""));
+    right.extend(catalog_rows(Context::Preview));
+
+    let rows = left.len().max(right.len()) as u16;
+    let rect = centered_rect(76.min(area.width.saturating_sub(2)), rows + 2, area);
     frame.render_widget(Clear, rect);
     let block = Block::bordered()
         .border_type(BorderType::Double)
-        .border_style(Style::new().fg(Color::Cyan))
-        .title("Help");
+        .border_style(Style::new().fg(theme.accent))
+        .title("Help — keymap");
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
 
-    let lines = vec![
-        help_line("Tab", "cycle pane focus"),
-        help_line("?", "toggle this help"),
-        help_line("Esc", "close help"),
-        help_line("q / Ctrl-C", "quit"),
-    ];
-    frame.render_widget(Paragraph::new(lines), inner);
+    let cols =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
+    frame.render_widget(Paragraph::new(left), cols[0]);
+    frame.render_widget(Paragraph::new(right), cols[1]);
 }
 
-fn help_line(key: &str, desc: &str) -> Line<'static> {
+fn help_line(key: &str, desc: &str, theme: &Theme) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!(" {key:<12}"), Style::new().fg(Color::Yellow)),
+        Span::styled(format!(" {key:<12}"), Style::new().fg(theme.warn)),
         Span::raw(desc.to_string()),
     ])
+}
+
+/// The command palette: a centered overlay with a query line and the
+/// fuzzy-filtered action list, key labels right-aligned.
+fn command_overlay(frame: &mut Frame, area: Rect, app: &App, query: &str, selected: usize) {
+    let theme = app.theme;
+    let filtered = actions::filtered_actions(query);
+    let list_h = (filtered.len() as u16).clamp(1, 12);
+    let width = 48.min(area.width.saturating_sub(2));
+    let rect = centered_rect(width, list_h + 3, area);
+    frame.render_widget(Clear, rect);
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::new().fg(theme.accent))
+        .title("Command");
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled(" > ", Style::new().fg(theme.accent)),
+        Span::styled(format!("{query}█"), Style::new().fg(theme.text)),
+    ])];
+    if filtered.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  no matching command",
+            Style::new().fg(theme.text_faint),
+        )));
+    }
+    let inner_w = inner.width as usize;
+    // Keep the selection visible when the list is longer than the box.
+    let visible = list_h as usize;
+    let offset = selected.saturating_sub(visible - 1);
+    for (i, info) in filtered.iter().enumerate().skip(offset).take(visible) {
+        let label = app.keymap.label(info.action);
+        let name = format!(" {} {}", if i == selected { "▶" } else { " " }, info.name);
+        let pad = inner_w.saturating_sub(name.chars().count() + label.chars().count() + 1);
+        let style = if i == selected {
+            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(theme.text_dim)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(name, style),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(label, Style::new().fg(theme.warn)),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn too_small(frame: &mut Frame, area: Rect) {
@@ -554,5 +675,83 @@ mod tests {
         app.eval.running = true;
         app.tick_count = 1; // pin the spinner frame
         insta::assert_snapshot!(render_to_string(&mut app, 160, 40));
+    }
+
+    // --- M14: horizontal overflow + command palette -----------------------
+
+    /// Five parallel sources feeding one union: wide enough to overflow the
+    /// canvas pane at 120 columns.
+    fn wide_pipe() -> Pipe {
+        let mut pipe = Pipe::new("wide");
+        let union = {
+            let sources: Vec<NodeId> = (0..5)
+                .map(|i| {
+                    pipe.add_node(
+                        "fetch_feed",
+                        Params::new().with("url", format!("https://s{i}.dev/rss")),
+                    )
+                })
+                .collect();
+            let union = pipe.add_node("union", Params::new());
+            for src in sources {
+                pipe.connect(src, "out", union, "in");
+            }
+            union
+        };
+        let output = pipe.add_node("output", Params::new());
+        pipe.connect(union, "out", output, "in");
+        pipe
+    }
+
+    /// Selection on the leftmost source: the canvas shows a `→ more` hint and
+    /// clips the overflowing right columns.
+    #[test]
+    fn wide_pipe_overflows_right_with_a_more_hint() {
+        let mut app = App::with_pipe(
+            Registry::with_builtins(),
+            wide_pipe(),
+            PathBuf::from("wide.pipe"),
+        );
+        app.focus = Pane::Canvas;
+        let rendered = render_to_string(&mut app, 120, 40);
+        assert!(rendered.contains("→ more"), "right overflow hint missing");
+        assert!(!rendered.contains("← more"), "nothing clipped on the left");
+        insta::assert_snapshot!(rendered);
+    }
+
+    /// Selecting the rightmost source auto-scrolls horizontally: the left
+    /// hint appears, and the selected box is on screen (double border).
+    #[test]
+    fn wide_pipe_hscrolls_to_reveal_the_selection() {
+        let mut app = App::with_pipe(
+            Registry::with_builtins(),
+            wide_pipe(),
+            PathBuf::from("wide.pipe"),
+        );
+        app.focus = Pane::Canvas;
+        // The rightmost source has the highest column; ids 1..=5 are the
+        // sources in insertion order, and columns follow NodeId tie-break.
+        app.selected = Some(NodeId(5));
+        let rendered = render_to_string(&mut app, 120, 40);
+        assert!(rendered.contains("← more"), "left overflow hint missing");
+        assert!(app.hscroll > 0, "render must advance hscroll");
+        assert!(
+            rendered.contains('╔'),
+            "selected box must be visible after hscroll"
+        );
+    }
+
+    #[test]
+    fn command_palette_overlay_lists_filtered_actions() {
+        let mut app = App::with_pipe(
+            Registry::with_builtins(),
+            sample_pipe(),
+            PathBuf::from("news_pipeline.pipe"),
+        );
+        app.mode = Mode::Command {
+            query: "run".to_string(),
+            selected: 0,
+        };
+        insta::assert_snapshot!(render_to_string(&mut app, 120, 40));
     }
 }

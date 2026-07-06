@@ -1700,10 +1700,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "crossterm",
+ "directories",
  "futures",
  "insta",
  "ratatui",
  "ripe-core",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

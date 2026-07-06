@@ -415,7 +415,10 @@ should leave the tree compiling and tested.
 - [ ] Help overlay (keymap) and a status-line hint system.
 - [ ] Command palette (fuzzy action search).
 - [ ] Undo/redo (snapshot or command stack over graph mutations).
-- [ ] Mouse support: click-select, drag-move, drag-to-connect.
+- [ ] Mouse support: click-select, drag-to-connect, wheel scroll, palette
+      click-to-insert. Drag-move was dropped in M14: it contradicts the
+      resolved auto-layout decision (layout is computed, never manual), so
+      there is no position to drag a node to.
 - [ ] Theming (color config) + light/dark.
 - [ ] Configurable keybindings.
 - **Done when:** a new user can discover actions without reading the source.
