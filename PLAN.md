@@ -420,14 +420,25 @@ should leave the tree compiling and tested.
 - [ ] Configurable keybindings.
 - **Done when:** a new user can discover actions without reading the source.
 
-### M15: Testing, CI, docs, release
-- [ ] Engine + module unit tests; runner integration tests; UI render snapshots
-      via `ratatui::TestBackend` + `insta`.
-- [ ] GitHub Actions: fmt, clippy, test on stable; cache the cargo registry.
+### M15: Docs
 - [ ] README with screencast/asciinema, a tutorial pipe (the mockup's
       `news_pipeline.pipe`, checked in under `examples/`), and the module catalog.
-- [ ] `cargo dist` or static musl builds for releases; publish `ripe-core` to crates.io if useful.
-- **Done when:** `git clone && cargo run` gives a working editor; CI gates merges.
+- **Done when:** a new user can go from `git clone` to a working tutorial pipe
+  with only the README.
+
+### M16: CI
+- [ ] GitHub Actions: fmt, clippy, test on stable; cache the cargo registry.
+- [ ] The suite CI runs already exists — engine/module unit tests, runner
+      integration tests, and UI snapshots (`ratatui::TestBackend` + `insta`)
+      were built per milestone; this wires them as gates, plus any coverage
+      gaps found doing so.
+- **Done when:** CI gates merges.
+
+### M17: Release
+- [ ] `cargo dist` or static musl builds for releases; publish `ripe-core` to
+      crates.io if useful.
+- **Done when:** a released binary runs the editor without a Rust toolchain,
+  and `git clone && cargo run` still works for source users.
 
 ---
 
