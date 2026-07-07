@@ -22,7 +22,7 @@ install`).
 ```sh
 git clone https://github.com/nogoth/ripe
 cd ripe
-cargo run -p ripe-tui -- examples/news_pipeline.pipe
+cargo run --bin ripe -- examples/news_pipeline.pipe
 ```
 
 Press `r` to run the pipe. The right panel fills with the merged feed; the
@@ -37,9 +37,9 @@ canvas shows per-node item counts. Then:
 Run the same pipe without the UI:
 
 ```sh
-cargo run -p ripe-cli -- -f examples/news_pipeline.pipe            # RSS to stdout
-cargo run -p ripe-cli -- -f examples/news_pipeline.pipe --format json -o out.json
-cargo run -p ripe-cli -- -f examples/news_pipeline.pipe --param min_score=500
+cargo run --bin ripe-run -- -f examples/news_pipeline.pipe            # RSS to stdout
+cargo run --bin ripe-run -- -f examples/news_pipeline.pipe --format json -o out.json
+cargo run --bin ripe-run -- -f examples/news_pipeline.pipe --param min_score=500
 ```
 
 ## Tutorial: the news pipeline
@@ -64,7 +64,7 @@ filter  score > ${min_score}                │
                   output  rss → stdout
 ```
 
-To build it yourself from an empty canvas (`cargo run -p ripe-tui`), start
+To build it yourself from an empty canvas (`cargo run --bin ripe`), start
 with a skeleton, then splice nodes into it. Two things make this fast:
 every node shows a badge number in its corner — pressing that number
 selects it — and inserting a node while the selection has outgoing edges
@@ -109,7 +109,7 @@ interpolated at eval time, and `ripe-run --param name=value` overrides the
 declared default — the tutorial pipe's score threshold is one:
 
 ```sh
-cargo run -p ripe-cli -- -f examples/news_pipeline.pipe --param min_score=500
+cargo run --bin ripe-run -- -f examples/news_pipeline.pipe --param min_score=500
 ```
 
 ## Module catalog
