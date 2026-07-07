@@ -432,8 +432,20 @@ should leave the tree compiling and tested.
 - **Done when:** a new user can discover actions without reading the source.
 
 ### M15: Docs
-- [ ] README with screencast/asciinema, a tutorial pipe (the mockup's
+- [x] README with screencast/asciinema, a tutorial pipe (the mockup's
       `news_pipeline.pipe`, checked in under `examples/`), and the module catalog.
+      The screencast is a GIF rendered by vhs from `docs/demo.tape` (ttyd +
+      ffmpeg required to regenerate; the tape is checked in so it's
+      reproducible). The mockup's second source (reddit r/rust) 403s
+      non-browser clients, so the checked-in pipe uses lobste.rs instead.
+- [x] Found while verifying the tutorial in a pty: `?` could not be typed
+      into any text field (URL query strings, regex patterns like
+      `(?<score>…)`) because event.rs translates it to ToggleHelp ahead of
+      the keymap in every mode. Fixed by routing Msg::ToggleHelp into the
+      active editor in text-entry modes (params overlay, path prompt,
+      command palette), mirroring the existing Ctrl-S-applies-params special
+      case. Every tutorial step in the README was then driven end-to-end in
+      tmux against the real binaries.
 - **Done when:** a new user can go from `git clone` to a working tutorial pipe
   with only the README.
 

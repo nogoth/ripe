@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "name": "news-pipeline",
+  "params": [
+    {
+      "name": "min_score",
+      "kind": "number",
+      "default": 100
+    }
+  ],
+  "nodes": [
+    {
+      "id": 1,
+      "kind": "fetch_feed",
+      "params": { "url": "https://hnrss.org/frontpage" }
+    },
+    {
+      "id": 2,
+      "kind": "filter",
+      "params": { "rules": ["pubDate > now - 2d"] }
+    },
+    {
+      "id": 3,
+      "kind": "regex",
+      "params": {
+        "field": "description",
+        "pattern": "Points:\\s*(?<score>\\d+)",
+        "mode": "extract"
+      }
+    },
+    {
+      "id": 4,
+      "kind": "filter",
+      "params": { "rules": ["score > ${min_score}"] }
+    },
+    {
+      "id": 5,
+      "kind": "fetch_feed",
+      "params": { "url": "https://lobste.rs/rss" }
+    },
+    {
+      "id": 6,
+      "kind": "union",
+      "params": {}
+    },
+    {
+      "id": 7,
+      "kind": "sort",
+      "params": { "by": "pubDate", "order": "desc" }
+    },
+    {
+      "id": 8,
+      "kind": "output",
+      "params": { "format": "rss", "destination": "" }
+    }
+  ],
+  "edges": [
+    { "from": { "node": 1, "port": "out" }, "to": { "node": 2, "port": "in" } },
+    { "from": { "node": 2, "port": "out" }, "to": { "node": 3, "port": "in" } },
+    { "from": { "node": 3, "port": "out" }, "to": { "node": 4, "port": "in" } },
+    { "from": { "node": 4, "port": "out" }, "to": { "node": 6, "port": "in" } },
+    { "from": { "node": 5, "port": "out" }, "to": { "node": 6, "port": "in" } },
+    { "from": { "node": 6, "port": "out" }, "to": { "node": 7, "port": "in" } },
+    { "from": { "node": 7, "port": "out" }, "to": { "node": 8, "port": "in" } }
+  ],
+  "next_id": 9
+}
