@@ -27,7 +27,7 @@ use crate::ui::palette::{insert_letter, kind_at_row};
 pub fn update(app: &mut App, msg: Msg) {
     match msg {
         Msg::NextPane => on_next_pane(app),
-        Msg::ToggleHelp => app.show_help = !app.show_help,
+        Msg::ToggleHelp => on_toggle_help(app),
         Msg::Dismiss => on_dismiss(app),
         Msg::Quit => on_quit(app),
         Msg::Tick => on_tick(app),
@@ -88,6 +88,20 @@ pub fn update(app: &mut App, msg: Msg) {
         Msg::Mouse(m) => on_mouse(app, m),
 
         Msg::Key(key) => on_key(app, key),
+    }
+}
+
+/// `?` is translated ahead of the keymap (event.rs), but in text-entry modes
+/// it is just a character — URLs carry query strings and regex patterns carry
+/// `(?<name>…)` — so route it into the active editor instead of the overlay.
+/// Same pattern as Ctrl-S, which applies params rather than saving there.
+fn on_toggle_help(app: &mut App) {
+    let key = KeyEvent::new(KeyCode::Char('?'), crossterm::event::KeyModifiers::empty());
+    match &app.mode {
+        Mode::PromptPath { .. } => update(app, Msg::PromptChar('?')),
+        Mode::Command { .. } => on_key_command(app, key),
+        Mode::EditParams(_) => on_key_edit_params(app, key),
+        _ => app.show_help = !app.show_help,
     }
 }
 
@@ -1642,6 +1656,42 @@ mod tests {
         // Params are unchanged.
         assert_eq!(app.pipe.node(b).unwrap().params.get("rules"), None);
         assert!(!app.dirty, "Esc must not mark dirty");
+    }
+
+    #[test]
+    fn question_mark_types_into_text_fields_instead_of_toggling_help() {
+        // `?` arrives as Msg::ToggleHelp (event.rs translates it ahead of the
+        // keymap), but URLs and regex patterns contain literal `?`.
+        let (mut app, [_a, b, _c]) = canvas_app();
+        app.selected = Some(b); // filter node; field 0 is "rules" (RuleList)
+        update(&mut app, key_msg(KeyCode::Enter));
+        for ch in "title matches colou".chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+        update(&mut app, Msg::ToggleHelp);
+        update(&mut app, key_msg(KeyCode::Char('r')));
+        assert!(!app.show_help, "help must not open while editing params");
+        update(&mut app, Msg::Save);
+        let rules = app.pipe.node(b).unwrap().params.get("rules").unwrap();
+        assert_eq!(
+            rules.as_array().unwrap()[0].as_str().unwrap(),
+            "title matches colou?r"
+        );
+
+        // The path prompt takes `?` literally too.
+        update(&mut app, Msg::Open);
+        update(&mut app, Msg::ToggleHelp);
+        if let Mode::PromptPath { buf, .. } = &app.mode {
+            assert_eq!(buf, "?");
+        } else {
+            panic!("expected PromptPath, got {:?}", app.mode);
+        }
+        assert!(!app.show_help);
+        update(&mut app, Msg::Dismiss);
+
+        // Back in Normal mode it toggles the overlay as before.
+        update(&mut app, Msg::ToggleHelp);
+        assert!(app.show_help);
     }
 
     #[test]
