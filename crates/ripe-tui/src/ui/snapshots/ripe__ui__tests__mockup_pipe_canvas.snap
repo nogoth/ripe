@@ -1,27 +1,26 @@
 ---
 source: crates/ripe-tui/src/ui/mod.rs
-assertion_line: 376
 expression: "render_to_string(&mut app, 120, 40)"
 ---
  PIPES   EDIT  RUN  VIEW  HELP                               news_pipeline.pipe                               ● 8 nodes
 ┌Palette─────────────┐┏Canvas━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┌Preview────────────────────────┐
 │NODES               │┃╔════════════════════════════╗   ╭────────────────────────────╮┃│ FEED    ITEMS (0)    RAW      │
-│  filter           t│┃║1  Fetch Feed               ║   │5  Fetch Feed               │┃│                               │
+│  filter           t│┃║1  Fetch Feed               ║   │2  Fetch Feed               │┃│                               │
 │  limit            l│┃║https://hnrss.or… ✓ 44 items║   │https://www.redd… ✓ 44 items│┃│No preview yet — press r to run│
 │  regex            r│┃╚════════════════════════════╝   ╰────────────────────────────╯┃│           the pipe.           │
 │  reverse          e│┃               ▼                                │              ┃│                               │
 │  sort             s│┃╭────────────────────────────╮                  │              ┃│                               │
-│  tail             i│┃│2  Filter                   │                  │              ┃│                               │
+│  tail             i│┃│3  Filter                   │                  │              ┃│                               │
 │  transform        m│┃│item.pubDate > n… ✓ 32 items│                  │              ┃│                               │
 │  union            u│┃╰────────────────────────────╯                  │              ┃│                               │
 │  unique           q│┃               ▼                                │              ┃│                               │
 │                    │┃╭────────────────────────────╮                  │              ┃│                               │
-│SOURCES             │┃│3  Regex                    │                  │              ┃│                               │
+│SOURCES             │┃│4  Regex                    │                  │              ┃│                               │
 │  fetch_csv        v│┃│^\[(?<score>\d+)… ✓ 32 items│                  │              ┃│                               │
 │  fetch_feed       f│┃╰────────────────────────────╯                  │              ┃│                               │
 │  fetch_json       j│┃               ▼                                │              ┃│                               │
 │                    │┃╭────────────────────────────╮                  │              ┃│                               │
-│SINKS               │┃│4  Filter                   │                  │              ┃│                               │
+│SINKS               │┃│5  Filter                   │                  │              ┃│                               │
 │  output           o│┃│score > 100       ✓ 12 items│                  │              ┃│                               │
 │                    │┃╰────────────────────────────╯                  │              ┃│                               │
 │                    │┃               ├────────────────────────────────┘              ┃│                               │

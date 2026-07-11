@@ -1,6 +1,5 @@
 ---
 source: crates/ripe-tui/src/ui/mod.rs
-assertion_line: 462
 expression: "render_to_string(&mut app, 120, 40)"
 ---
  PIPES   EDIT  RUN  VIEW  HELP                                    snap.pipe                                   ● 1 nodes
@@ -35,11 +34,11 @@ expression: "render_to_string(&mut app, 120, 40)"
 │                    │┃ ║                                                                      ║                       │
 │                    │┃ ║                                                                      ║                       │
 │                    │┃ ║                                                                      ║                       │
-│                    │┃ ║Ctrl-s apply   Esc cancel   ↑/↓ field                                 ║                       │
+│                    │┃ ║Ctrl-s apply   Enter new line   Esc cancel   ↑/↓ field                ║                       │
 │                    │┃ ╚══════════════════════════════════════════════════════════════════════╝                       │
 │                    │┃                                                               ┃│                               │
 │                    │┃                                                               ┃│                               │
 │                    │┃                                                               ┃│                               │
 │                    │┃                                                               ┃│ Rendered 0 i…Auto refresh: on │
 └────────────────────┘┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛└───────────────────────────────┘
- Mode: Params                                                                     Ctrl-s apply   Esc cancel   ↑/↓ field
+ Mode: Params                                                    Ctrl-s apply   Enter new line   Esc cancel   ↑/↓ field

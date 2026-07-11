@@ -185,7 +185,19 @@ fn status_line(frame: &mut Frame, area: Rect, app: &App) {
 fn hint_line(app: &App) -> String {
     let k = |a: Action| app.keymap.label(a);
     if matches!(app.mode, Mode::EditParams(_)) {
-        return "Ctrl-s apply   Esc cancel   ↑/↓ field ".to_string();
+        // Enter applies from single-line fields; in the rule list it's a
+        // newline, so don't advertise it as apply there.
+        let multiline = matches!(
+            app.edit_state
+                .as_ref()
+                .and_then(|s| s.editors.get(s.focused)),
+            Some(crate::app::FieldEditor::RuleList(_))
+        );
+        return if multiline {
+            "Ctrl-s apply   Enter new line   Esc cancel   ↑/↓ field ".to_string()
+        } else {
+            "Enter/Ctrl-s apply   Esc cancel   ↑/↓ field ".to_string()
+        };
     }
     if matches!(app.mode, Mode::Command { .. }) {
         return "type to filter   ↑/↓ select   Enter run   Esc close ".to_string();

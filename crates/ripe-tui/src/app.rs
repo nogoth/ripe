@@ -486,11 +486,15 @@ impl App {
         }
     }
 
-    /// Jump to the node whose [`NodeId`] badge number equals `n`. No-op if
-    /// no such node exists.
+    /// Jump to the node whose canvas badge number equals `n`. Badges are
+    /// visual positions (row-major over the layout, 1-based), not internal
+    /// ids — ids grow monotonically and are never reused, so after enough
+    /// add/delete churn they would outrun the `1`-`9` jump keys. No-op if
+    /// there is no `n`th node.
     pub fn select_badge(&mut self, n: u64) {
-        if self.pipe.nodes.iter().any(|node| node.id.0 == n) {
-            self.selected = Some(NodeId(n));
+        let order = crate::ui::layout::Layout::compute(&self.pipe).badge_order();
+        if let Some(&id) = (n as usize).checked_sub(1).and_then(|i| order.get(i)) {
+            self.selected = Some(id);
         }
     }
 

@@ -93,6 +93,24 @@ impl Layout {
         self.slots.iter().map(|(&id, &slot)| (id, slot))
     }
 
+    /// Node ids in visual order — row-major, left to right. Index + 1 is the
+    /// badge number the canvas draws on each box and the number the `1`-`9`
+    /// jump keys address, so badges stay small and dense no matter how far
+    /// the pipe's internal ids (which are never reused) have grown.
+    pub fn badge_order(&self) -> Vec<NodeId> {
+        let mut ids: Vec<(Slot, NodeId)> = self.slots.iter().map(|(&id, &s)| (s, id)).collect();
+        ids.sort_by_key(|(slot, _)| (slot.row, slot.col));
+        ids.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// The 1-based badge number for `id`, if it is in this layout.
+    pub fn badge(&self, id: NodeId) -> Option<usize> {
+        self.badge_order()
+            .iter()
+            .position(|&n| n == id)
+            .map(|i| i + 1)
+    }
+
     /// Number of rows (layers) in the layout.
     pub fn rows(&self) -> usize {
         self.rows

@@ -1,27 +1,26 @@
 ---
 source: crates/ripe-tui/src/ui/mod.rs
-assertion_line: 522
 expression: "render_to_string(&mut app, 160, 40)"
 ---
  PIPES   EDIT  RUN  VIEW  HELP                                                   news_pipeline.pipe                                                   ● 8 nodes
 ┌Palette─────────────┐┌Canvas────────────────────────────────────────────────────────────────────────────────────┐┏Preview: Temp RSS━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 │NODES               ││╔═════════════════════════════════════════╗   ╭─────────────────────────────────────────╮ │┃ FEED    ITEMS (3)    RAW                   ┃
-│  filter           t││║1  Fetch Feed                            ║   │5  Fetch Feed                            │ │┃ ● Introducing Rust 1.78             2h ago ┃
+│  filter           t││║1  Fetch Feed                            ║   │2  Fetch Feed                            │ │┃ ● Introducing Rust 1.78             2h ago ┃
 │  limit            l││║https://hnrss.org/frontpage              ║   │https://www.reddit.com/r/rust/.rss       │ │┃  blog.rust-lang.org                        ┃
 │  regex            r││╚═════════════════════════════════════════╝   ╰─────────────────────────────────────────╯ │┃                                            ┃
 │  reverse          e││                     ▼                                             │                      │┃  Rust 1.78.0 is now available! This release┃
 │  sort             s││╭─────────────────────────────────────────╮                        │                      │┃  includes performance improvements across… ┃
-│  tail             i│││2  Filter                                │                        │                      │┃────────────────────────────────────────────┃
+│  tail             i│││3  Filter                                │                        │                      │┃────────────────────────────────────────────┃
 │  transform        m│││item.pubDate > now - 2d                  │                        │                      │┃ ● Ask HN: What's a technology that… 3h ago ┃
 │  union            u││╰─────────────────────────────────────────╯                        │                      │┃  news.ycombinator.com                      ┃
 │  unique           q││                     ▼                                             │                      │┃                                            ┃
 │                    ││╭─────────────────────────────────────────╮                        │                      │┃  I'm looking for examples of technologies  ┃
-│SOURCES             │││3  Regex                                 │                        │                      │┃  that had a lot of promise but never reall…┃
+│SOURCES             │││4  Regex                                 │                        │                      │┃  that had a lot of promise but never reall…┃
 │  fetch_csv        v│││^\[(?<score>\d+)\]\s(?<title>.*)         │                        │                      │┃────────────────────────────────────────────┃
 │  fetch_feed       f││╰─────────────────────────────────────────╯                        │                      │┃ ● The problem with async in Rust    5h ago ┃
 │  fetch_json       j││                     ▼                                             │                      │┃  smallcultfollowing.com                    ┃
 │                    ││╭─────────────────────────────────────────╮                        │                      │┃                                            ┃
-│SINKS               │││4  Filter                                │                        │                      │┃  Async Rust is powerful but it comes with  ┃
+│SINKS               │││5  Filter                                │                        │                      │┃  Async Rust is powerful but it comes with  ┃
 │  output           o│││score > 100                              │                        │                      │┃  complexity that isn't always worth the…   ┃
 │                    ││╰─────────────────────────────────────────╯                        │                      │┃                                            ┃
 │                    ││                     ├─────────────────────────────────────────────┘                      │┃                                            ┃

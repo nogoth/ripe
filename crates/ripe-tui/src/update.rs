@@ -501,11 +501,14 @@ fn describe_failure(
         });
     match culprit {
         Some((id, r)) => {
-            let kind = pipe.node(*id).map_or("?", |n| n.kind.as_str());
             let reason = r.error.as_deref().unwrap_or("did not produce output");
-            format!("{id} {kind}: {}", reason.lines().next().unwrap_or(reason))
+            format!(
+                "{}: {}",
+                node_label(pipe, *id),
+                reason.lines().next().unwrap_or(reason)
+            )
         }
-        None => format!("output node {output_id} produced no stream"),
+        None => format!("{} produced no stream", node_label(pipe, output_id)),
     }
 }
 
@@ -665,6 +668,21 @@ fn on_key_edit_params(app: &mut App, key: KeyEvent) {
     if !has_fields {
         app.edit_state = None;
         app.mode = Mode::Normal;
+        return;
+    }
+
+    // Enter applies the overlay from single-line editors — in a one-line
+    // field a newline is invisible, so it just looks like the text vanished.
+    // Only the multi-line rule list keeps Enter as newline (Ctrl-S applies).
+    if key.code == KeyCode::Enter
+        && !matches!(
+            app.edit_state
+                .as_ref()
+                .and_then(|s| s.editors.get(s.focused)),
+            Some(FieldEditor::RuleList(_))
+        )
+    {
+        do_apply_params(app);
         return;
     }
 
@@ -841,7 +859,7 @@ fn do_apply_params(app: &mut App) {
         app.dirty = true;
         app.edit_state = None;
         app.mode = Mode::Normal;
-        app.status = format!("params saved for {node_id}");
+        app.status = format!("params saved for {}", node_label(&app.pipe, node_id));
         schedule_eval(app);
     } else {
         let state = app.edit_state.as_mut().unwrap();
@@ -1049,6 +1067,7 @@ fn do_delete_node(app: &mut App) {
         return;
     };
     push_undo(app);
+    let label = node_label(&app.pipe, id);
     let neighbor = sensible_neighbor(&app.pipe, id);
     app.pipe.remove_node(id);
     // Neighbor might itself have been removed (e.g. a self-edge pipe, which
@@ -1060,7 +1079,7 @@ fn do_delete_node(app: &mut App) {
     // The node is gone; drop its stale status so nothing lingers on the canvas.
     app.statuses.remove(&id);
     app.dirty = true;
-    app.status = format!("deleted {id}");
+    app.status = format!("deleted {label}");
     schedule_eval(app);
 }
 
@@ -1071,14 +1090,18 @@ fn do_delete_edge(app: &mut App) {
     let maybe_edge = app.pipe.edges_into(id).next().cloned();
     if let Some(edge) = maybe_edge {
         push_undo(app);
-        let desc = format!("{} → {}", edge.from.node, edge.to.node);
+        let desc = format!(
+            "{} → {}",
+            node_label(&app.pipe, edge.from.node),
+            node_label(&app.pipe, edge.to.node)
+        );
         app.pipe
             .remove_edge(edge.from.node, &edge.from.port, edge.to.node, &edge.to.port);
         app.dirty = true;
         app.status = format!("removed edge {desc}");
         schedule_eval(app);
     } else {
-        app.status = format!("no edges into {id}");
+        app.status = format!("no edges into {}", node_label(&app.pipe, id));
     }
 }
 
@@ -1118,7 +1141,8 @@ fn do_begin_connect(app: &mut App) {
     };
     app.mode = Mode::Connecting { from };
     app.status = format!(
-        "connect: navigate to target then press c or Enter (Esc to cancel) [source: {from}]"
+        "connect: navigate to target then press c or Enter (Esc to cancel) [source: {}]",
+        node_label(&app.pipe, from)
     );
 }
 
@@ -1146,7 +1170,11 @@ fn try_connect(app: &mut App, from: NodeId, to: NodeId) {
         push_undo(app);
         app.pipe = candidate;
         app.dirty = true;
-        app.status = format!("connected {from} → {to}");
+        app.status = format!(
+            "connected {} → {}",
+            node_label(&app.pipe, from),
+            node_label(&app.pipe, to)
+        );
         schedule_eval(app);
     } else {
         app.status = errors[0].clone();
@@ -1154,6 +1182,18 @@ fn try_connect(app: &mut App, from: NodeId, to: NodeId) {
 }
 
 // --- helpers -------------------------------------------------------------
+
+/// User-facing name for a node: its canvas badge plus kind, e.g. `#3 filter`.
+/// Badges are visual positions, so this is the number the user actually sees
+/// on the box — internal ids are never shown. Falls back to the raw id when
+/// the node has no badge (deleted, or the layout is empty).
+fn node_label(pipe: &ripe_core::Pipe, id: NodeId) -> String {
+    let kind = pipe.node(id).map_or("?", |n| n.kind.as_str());
+    match crate::ui::layout::Layout::compute(pipe).badge(id) {
+        Some(badge) => format!("#{badge} {kind}"),
+        None => format!("{id} {kind}"),
+    }
+}
 
 /// The module kind whose insert letter (as shown in the palette) is `ch`.
 /// Returns `None` for unmapped letters so `do_insert` can surface an error.
@@ -1524,7 +1564,7 @@ mod tests {
     #[test]
     fn badge_jump_selects_correct_node() {
         let (mut app, [a, b, c]) = canvas_app();
-        // NodeIds are 1, 2, 3 (Pipe assigns sequentially from 1).
+        // A linear chain lays out top-to-bottom, so badges 1..3 are a, b, c.
         app.selected = Some(a);
         update(&mut app, key_msg(KeyCode::Char('3')));
         assert_eq!(app.selected, Some(c));
@@ -1539,7 +1579,27 @@ mod tests {
         let (mut app, [a, _, _]) = canvas_app();
         app.selected = Some(a);
         update(&mut app, key_msg(KeyCode::Char('9')));
-        assert_eq!(app.selected, Some(a)); // no node with id 9
+        assert_eq!(app.selected, Some(a)); // only three nodes
+    }
+
+    #[test]
+    fn badges_stay_dense_after_id_churn() {
+        // Badges are visual positions, not ids: after deleting the middle
+        // node, the two survivors are badges 1 and 2 even though their
+        // internal ids are 1 and 3 (ids are never reused).
+        let (mut app, [a, b, c]) = canvas_app();
+        app.selected = Some(b);
+        update(&mut app, key_msg(KeyCode::Char('d')));
+        assert!(app.pipe.node(b).is_none());
+
+        update(&mut app, key_msg(KeyCode::Char('2')));
+        assert_eq!(app.selected, Some(c), "badge 2 is the second visible node");
+        update(&mut app, key_msg(KeyCode::Char('1')));
+        assert_eq!(app.selected, Some(a));
+        // The old id-keyed behavior: '3' selected node id 3. Now there is no
+        // third visible node, so it's a no-op.
+        update(&mut app, key_msg(KeyCode::Char('3')));
+        assert_eq!(app.selected, Some(a));
     }
 
     #[test]
@@ -1656,6 +1716,53 @@ mod tests {
         // Params are unchanged.
         assert_eq!(app.pipe.node(b).unwrap().params.get("rules"), None);
         assert!(!app.dirty, "Esc must not mark dirty");
+    }
+
+    #[test]
+    fn enter_applies_the_overlay_from_single_line_fields() {
+        // Insert a fresh fetch_feed, open its params, type a URL, hit Enter:
+        // the overlay applies (a newline in a one-line field is invisible and
+        // looks like the text vanished).
+        let mut app = app();
+        app.focus = Pane::Canvas;
+        update(&mut app, key_msg(KeyCode::Char('a')));
+        update(&mut app, key_msg(KeyCode::Char('f')));
+        update(&mut app, key_msg(KeyCode::Enter)); // open overlay
+        assert!(matches!(app.mode, Mode::EditParams(_)));
+        for ch in "https://x.dev/feed".chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+        update(&mut app, key_msg(KeyCode::Enter)); // apply
+        assert_eq!(app.mode, Mode::Normal, "Enter applies a single-line field");
+        let id = app.selected.unwrap();
+        assert_eq!(
+            app.pipe.node(id).unwrap().params.get_str("url"),
+            Some("https://x.dev/feed")
+        );
+    }
+
+    #[test]
+    fn enter_stays_a_newline_in_the_rule_list() {
+        let (mut app, [_a, b, _c]) = canvas_app();
+        app.selected = Some(b); // filter node; field 0 is "rules" (RuleList)
+        update(&mut app, key_msg(KeyCode::Enter)); // open overlay
+        for ch in "score > 100".chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+        update(&mut app, key_msg(KeyCode::Enter)); // newline, not apply
+        assert!(
+            matches!(app.mode, Mode::EditParams(_)),
+            "Enter in the rule list must not close the overlay"
+        );
+        for ch in "title contains rust".chars() {
+            update(&mut app, key_msg(KeyCode::Char(ch)));
+        }
+        update(&mut app, Msg::Save); // Ctrl-S applies
+        assert_eq!(app.mode, Mode::Normal);
+        let rules = app.pipe.node(b).unwrap().params.get("rules").unwrap();
+        let arr = rules.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[1].as_str().unwrap(), "title contains rust");
     }
 
     #[test]

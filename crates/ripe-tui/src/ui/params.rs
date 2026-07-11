@@ -41,9 +41,16 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     frame.render_widget(Clear, overlay);
 
-    let node = app.pipe.node(node_id);
-    let title = node
-        .map(|n| format!(" node {} ({}) ", n.id, n.kind))
+    // Title shows the canvas badge, not the internal id — it must name the
+    // number the user sees on the box.
+    let badge = crate::ui::layout::Layout::compute(&app.pipe).badge(node_id);
+    let title = app
+        .pipe
+        .node(node_id)
+        .map(|n| match badge {
+            Some(b) => format!(" node #{b} ({}) ", n.kind),
+            None => format!(" node {} ({}) ", n.id, n.kind),
+        })
         .unwrap_or_else(|| " params ".to_string());
 
     let block = Block::bordered()
@@ -57,7 +64,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    // Footer hint — always on the last inner row.
+    // Footer hint — always on the last inner row. Enter means "apply" in
+    // single-line fields but "new line" in the multi-line rule list, so the
+    // hint follows the focused field.
+    let multiline_focused = matches!(
+        state.editors.get(state.focused),
+        Some(crate::app::FieldEditor::RuleList(_))
+    );
     let footer_y = inner.y + inner.height.saturating_sub(1);
     render_footer(
         frame,
@@ -67,6 +80,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             width: inner.width,
             height: 1,
         },
+        multiline_focused,
         &theme,
     );
 
@@ -124,17 +138,30 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
 // --- sub-renderers -------------------------------------------------------
 
-fn render_footer(frame: &mut Frame, rect: Rect, theme: &Theme) {
+fn render_footer(frame: &mut Frame, rect: Rect, multiline_focused: bool, theme: &Theme) {
     let key = Style::new().fg(theme.warn).add_modifier(Modifier::BOLD);
-    let line = Line::from(vec![
-        Span::styled("Ctrl-s", key),
+    let mut spans = vec![
+        Span::styled(
+            if multiline_focused {
+                "Ctrl-s"
+            } else {
+                "Enter/Ctrl-s"
+            },
+            key,
+        ),
         Span::raw(" apply   "),
+    ];
+    if multiline_focused {
+        spans.push(Span::styled("Enter", key));
+        spans.push(Span::raw(" new line   "));
+    }
+    spans.extend([
         Span::styled("Esc", key),
         Span::raw(" cancel   "),
         Span::styled("↑/↓", key),
         Span::raw(" field"),
     ]);
-    frame.render_widget(Paragraph::new(line), rect);
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 
 fn render_form_error(frame: &mut Frame, rect: Rect, err: &str, theme: &Theme) {

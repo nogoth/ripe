@@ -429,6 +429,23 @@ should leave the tree compiling and tested.
       (the preview's `a` auto-refresh still wins via pane context), and the
       app starts with the canvas focused so "press a to add a node" is
       immediately actionable.
+- [x] Three usability findings reported directly by hand-testing the TUI
+      (2026-07-07): (1) in the param overlay, Enter fell through to the
+      text editor as a newline — in a one-line field (URL, pattern) this is
+      invisible, so applying a URL looked like the text vanished; Ctrl-S
+      was the only way to apply. Fixed: Enter now applies from single-line
+      fields, and stays a newline only in the multi-line rules/ops editor
+      (the footer/status-line hint shows which). (2) Connecting two nodes
+      (`c` … navigate … `c`) was undiscoverable without reading the status
+      line. Left as-is — the status line already names the source and
+      prompts for the next step; see the README tutorial for a worked
+      example. (3) Canvas badges were the raw, monotonically-increasing
+      `NodeId` — after enough add/delete churn a 3-node pipe could show
+      badges like 12/14/15, and the `1`-`9` jump keys stopped reaching
+      anything past id 9. Fixed: badges are now the node's 1-based visual
+      position (row-major over the auto-layout), recomputed every render,
+      while ids stay internal and never reused (undo/status-map keys are
+      unaffected).
 - **Done when:** a new user can discover actions without reading the source.
 
 ### M15: Docs

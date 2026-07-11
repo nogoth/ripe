@@ -90,11 +90,16 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, app: &mut App, focused: bool
 
     draw_wires(&mut painter, &layout, &app.pipe, box_w, &theme);
     let spinner = spinner_frame(app.tick_count);
+    let badge_order = layout.badge_order();
     for (id, slot) in layout.iter() {
         let node = app.pipe.node(id).expect("layout ids come from the pipe");
+        let badge = badge_order
+            .iter()
+            .position(|&n| n == id)
+            .map_or(0, |i| i + 1);
         draw_box(
             &mut painter,
-            id,
+            badge,
             slot,
             box_w,
             &node.kind,
@@ -360,7 +365,7 @@ fn glyph(mask: u8) -> char {
 #[allow(clippy::too_many_arguments)]
 fn draw_box(
     p: &mut Painter,
-    id: NodeId,
+    badge: usize,
     slot: Slot,
     box_w: u16,
     kind: &str,
@@ -428,7 +433,7 @@ fn draw_box(
             theme.kind_color(kind)
         })
         .add_modifier(Modifier::BOLD);
-    let title = truncate(&format!("{}  {}", id.0, kind_title(kind)), inner_w);
+    let title = truncate(&format!("{badge}  {}", kind_title(kind)), inner_w);
     p.put_str(inner_x, top + 1, &title, title_style);
 
     // Row 2: param summary on the left, eval status on the right. A node that
