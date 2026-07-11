@@ -1,5 +1,7 @@
 # ripe
 
+### **R**ust **I**nternet **P**ipe **E**ngine
+
 **Yahoo Pipes, reborn in your terminal.** ripe is a TUI for building feed
 pipelines as a visual DAG — fetch RSS/JSON/CSV, filter, transform, merge,
 sort, and emit a new feed — plus a headless runner for cron.
