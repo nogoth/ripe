@@ -2,7 +2,7 @@
 source: crates/ripe-tui/src/ui/mod.rs
 expression: rendered
 ---
- PIPES   EDIT  RUN  VIEW  HELP                                    wide.pipe                                   ● 7 nodes
+ PIPES                                                wide.pipe                                               ● 7 nodes
 ┌Palette─────────────┐┏Canvas━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┌Preview────────────────────────┐
 │NODES               │┃╔════════════════════════════╗   ╭────────────────────────────╮┃│ FEED    ITEMS (0)    RAW      │
 │  filter           t│┃║1  Fetch Feed               ║   │2  Fetch Feed               │┃│                               │

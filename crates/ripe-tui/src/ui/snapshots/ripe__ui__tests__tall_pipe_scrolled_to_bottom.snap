@@ -1,9 +1,8 @@
 ---
 source: crates/ripe-tui/src/ui/mod.rs
-assertion_line: 423
 expression: "render_to_string(&mut app, 120, 40)"
 ---
- PIPES   EDIT  RUN  VIEW  HELP                                   tall.pipe                                   ● 11 nodes
+ PIPES                                                tall.pipe                                              ● 11 nodes
 ┌Palette─────────────┐┏Canvas━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓┌Preview────────────────────────┐
 │NODES               │┃╰───────────────────────────↑ more                             ┃│ FEED    ITEMS (0)    RAW      │
 │  filter           t│┃               ▼                                               ┃│                               │

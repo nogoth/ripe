@@ -98,16 +98,13 @@ pub(crate) fn pane_block(title: &str, focused: bool, theme: &Theme) -> Block<'st
 }
 
 fn top_bar(frame: &mut Frame, area: Rect, app: &App) {
-    let menu = Line::from(vec![
-        Span::styled(
-            " PIPES ",
-            Style::new()
-                .bg(app.theme.menu_bg)
-                .fg(app.theme.menu_fg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  EDIT  RUN  VIEW  HELP"),
-    ]);
+    let menu = Line::from(Span::styled(
+        " PIPES ",
+        Style::new()
+            .bg(app.theme.menu_bg)
+            .fg(app.theme.menu_fg)
+            .add_modifier(Modifier::BOLD),
+    ));
 
     let mut name = app.file_label();
     if app.dirty {

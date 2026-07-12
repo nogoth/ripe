@@ -2,7 +2,7 @@
 source: crates/ripe-tui/src/ui/mod.rs
 expression: "render_to_string(&mut app, 160, 40)"
 ---
- PIPES   EDIT  RUN  VIEW  HELP                                                   news_pipeline.pipe                                                   ● 8 nodes
+ PIPES                                                               news_pipeline.pipe                                                               ● 8 nodes
 ┌Palette─────────────┐┌Canvas────────────────────────────────────────────────────────────────────────────────────┐┏Preview: Temp RSS━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 │NODES               ││╔═════════════════════════════════════════╗   ╭─────────────────────────────────────────╮ │┃ FEED    ITEMS (3)    RAW                   ┃
 │  filter           t││║1  Fetch Feed                            ║   │2  Fetch Feed                            │ │┃                                            ┃
