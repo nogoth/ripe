@@ -108,7 +108,7 @@ impl ItemCard {
             .unwrap_or_default();
         let snippet = item
             .get_str("description")
-            .map(|d| collapse_ws(&d))
+            .map(|d| collapse_ws(&strip_html(&d)))
             .unwrap_or_default();
         ItemCard {
             title,
@@ -138,6 +138,77 @@ fn domain_of(link: &str) -> Option<String> {
 /// carry newlines and indentation inside `description`.
 fn collapse_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Reduce an HTML fragment to its text: drop tags, then decode the entities
+/// feeds actually use. Feed `description`s routinely arrive as markup
+/// (`<p><a href="…">Comments</a></p>`); a card snippet wants the words.
+/// Coarse by design — a scanner, not a parser: only the snippet uses this,
+/// RAW and `ripe-run` output keep the original untouched.
+fn strip_html(s: &str) -> String {
+    // Drop everything from `<` to the next `>`. Tags become spaces so
+    // `<p>a</p><p>b</p>` reads "a b", not "ab"; collapse_ws dedupes them.
+    let mut text = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => {
+                in_tag = false;
+                text.push(' ');
+            }
+            _ if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+
+    // Decode entities after tag removal so encoded markup (`&lt;p&gt;`)
+    // surfaces as visible text rather than becoming a tag to strip.
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while let Some(i) = rest.find('&') {
+        out.push_str(&rest[..i]);
+        rest = &rest[i..];
+        // An entity is `&name;` with a short name — a distant or missing
+        // semicolon means a bare ampersand (`AT&T`), kept as-is.
+        let decoded = rest[1..]
+            .split_once(';')
+            .filter(|(name, _)| name.len() <= 8)
+            .and_then(|(name, after)| decode_entity(name).map(|c| (c, after)));
+        match decoded {
+            Some((c, after)) => {
+                out.push(c);
+                rest = after;
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The named entities common in feeds, plus numeric (`#39`, `#x2019`) forms.
+/// Unrecognized names return `None` and are left verbatim in the text.
+fn decode_entity(name: &str) -> Option<char> {
+    Some(match name {
+        "amp" => '&',
+        "lt" => '<',
+        "gt" => '>',
+        "quot" => '"',
+        "apos" => '\'',
+        "nbsp" => ' ',
+        _ => {
+            let code = name.strip_prefix('#')?;
+            let code = match code.strip_prefix(['x', 'X']) {
+                Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                None => code.parse().ok()?,
+            };
+            return char::from_u32(code);
+        }
+    })
 }
 
 /// A coarse "N unit ago" for a past instant. Future instants and anything
@@ -219,6 +290,58 @@ mod tests {
     #[test]
     fn collapse_ws_flattens_internal_whitespace() {
         assert_eq!(collapse_ws("  a\n\t b   c "), "a b c");
+    }
+
+    #[test]
+    fn strip_html_drops_tags_and_keeps_text() {
+        // The lobste.rs shape that shows up verbatim without stripping.
+        assert_eq!(
+            collapse_ws(&strip_html(
+                r#"<p><a href="https://lobste.rs/s/abc">Comments</a></p>"#
+            )),
+            "Comments"
+        );
+        // Adjacent blocks stay separated.
+        assert_eq!(collapse_ws(&strip_html("<p>a</p><p>b</p>")), "a b");
+        // An unterminated tag drops the trailing fragment rather than
+        // leaking markup into the card.
+        assert_eq!(collapse_ws(&strip_html("text <a href")), "text");
+    }
+
+    #[test]
+    fn strip_html_decodes_entities_but_keeps_bare_ampersands() {
+        assert_eq!(strip_html("Fish &amp; Chips &lt;3"), "Fish & Chips <3");
+        assert_eq!(
+            strip_html("&quot;hi&quot; &apos;there&apos;"),
+            "\"hi\" 'there'"
+        );
+        // Numeric, decimal and hex.
+        assert_eq!(strip_html("it&#39;s&#x2026;"), "it's…");
+        // nbsp becomes a plain space.
+        assert_eq!(strip_html("a&nbsp;b"), "a b");
+        // Encoded markup surfaces as text instead of being stripped.
+        assert_eq!(
+            strip_html("&lt;p&gt;not a tag&lt;/p&gt;"),
+            "<p>not a tag</p>"
+        );
+        // A bare ampersand or unknown entity is left alone.
+        assert_eq!(
+            strip_html("AT&T; A & B &bogus; &#xzz;"),
+            "AT&T; A & B &bogus; &#xzz;"
+        );
+    }
+
+    #[test]
+    fn card_snippet_strips_markup_from_description() {
+        let now = at("2026-07-05T12:00:00+00:00");
+        let items = vec![item(json!({
+            "title": "Odyssey Linux",
+            "description": "<p><a href=\"https://lobste.rs/s/q4fx6x\">Comments</a></p>",
+        }))];
+        let pv = Preview::build(&items, Format::Rss, "t", now);
+        assert_eq!(pv.cards[0].snippet, "Comments");
+        // RAW output keeps the original markup — stripping is card-only.
+        assert!(pv.raw.contains("lobste.rs/s/q4fx6x"));
     }
 
     #[test]
