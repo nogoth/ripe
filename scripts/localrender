@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Re-render docs/demo.gif from docs/demo.tape.
+#
+# Needs cargo plus mise-installed vhs and ttyd. ffmpeg must be the
+# johnvansickle static build — the mise plugin's build is broken — so on
+# first run this fetches it into ~/.local/opt/ffmpeg-static (override
+# with FFMPEG_DIR).
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+MISE="${MISE:-$HOME/.local/bin/mise}"
+VHS_VERSION=0.11.0
+TTYD_VERSION=1.7.7
+FFMPEG_DIR="${FFMPEG_DIR:-$HOME/.local/opt/ffmpeg-static}"
+
+if [ ! -x "$FFMPEG_DIR/ffmpeg" ]; then
+    echo "static ffmpeg not found; fetching into $FFMPEG_DIR" >&2
+    mkdir -p "$FFMPEG_DIR"
+    curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+        | tar -xJ --strip-components=1 -C "$FFMPEG_DIR"
+fi
+export PATH="$FFMPEG_DIR:$PATH"
+
+cargo build -p ripe-tui
+exec "$MISE" x "vhs@$VHS_VERSION" "ttyd@$TTYD_VERSION" -- vhs docs/demo.tape
