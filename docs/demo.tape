@@ -15,6 +15,7 @@ Set Width 1300
 Set Height 720
 Set Padding 8
 Set TypingSpeed 60ms
+Set PlaybackSpeed 0.9
 
 Type "./target/debug/ripe examples/news_pipeline.pipe"
 Enter
